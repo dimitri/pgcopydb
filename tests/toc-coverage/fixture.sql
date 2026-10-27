@@ -4,9 +4,12 @@
 -- Installs one (or a small number) of as many distinct pg_dump/pg_restore
 -- Archive TOC object types as can reasonably be created with plain SQL, on
 -- a single superuser connection, without external extensions that aren't
--- guaranteed present. Used to capture a real, saved `pg_restore --list`
--- fixture exercising pgcopydb's Archive TOC parser against real pg_dump
--- output rather than hand-typed sample lines.
+-- guaranteed present -- except fixture_transform_ext, a tiny do-nothing C
+-- extension committed alongside this file, needed for a real TRANSFORM
+-- (see its own README for why plain SQL/plpgsql can't make one). Used to
+-- capture a real, saved `pg_restore --list` fixture exercising pgcopydb's
+-- Archive TOC parser against real pg_dump output rather than hand-typed
+-- sample lines.
 --
 -- Deliberately NOT exhaustive: ARCHIVE_TAG_ACCESS_METHOD, SHELL_TYPE and
 -- DUMMY_TYPE need a C-level handler function or a genuine circular type
@@ -253,10 +256,26 @@ create subscription fixture_sub
 comment on subscription fixture_sub is 'fixture subscription comment';
 
 --
--- TRANSFORM (needs a language + a C transform function; plpython3 is not
--- guaranteed installed, so this is commented out and intentionally
--- skipped -- see fixture.sql header note)
+-- TRANSFORM: https://www.postgresql.org/docs/current/sql-createtransform.html
+-- -- tells a procedural language (PL/Python, PL/Perl, ...) how to convert
+-- a given SQL type to and from that language's own native representation.
+-- A real one needs a C-language transform function pair (the pseudo-type
+-- `internal` their signature requires can't be used from plpgsql/SQL),
+-- so this uses the do-nothing fixture_transform_ext extension committed
+-- alongside this file instead of a stock PL extension (plpython3/plperl
+-- aren't guaranteed installed, and their own *_plpython/*_plperl
+-- transform contrib modules aren't packaged on every distro -- see that
+-- extension's own README for why). The CREATE TRANSFORM statement itself
+-- is run standalone, after the extension, so it's dumped as its own
+-- object rather than hidden as an extension member.
 --
+create extension if not exists fixture_transform;
+
+create transform for int4 language plpgsql (
+    from sql with function fixture_transform_from_sql(internal),
+    to sql with function fixture_transform_to_sql(internal)
+);
+comment on transform for int4 language plpgsql is 'fixture transform comment';
 
 --
 -- LARGE OBJECT / BLOB / BLOB_DATA

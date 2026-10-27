@@ -2422,17 +2422,20 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 	}
 
 	/*
-	 * "functions with parameters of this type": item->name holds the whole
-	 * signature text verbatim for a top-level (non-ACL/COMMENT) FUNCTION/
-	 * PROCEDURE/AGGREGATE/OPERATOR/CAST entry (see archive_toc_parser.c's
-	 * ARCHIVE_SHAPE_SIMPLE/OPAQUE); for an ACL/COMMENT entry on one of
-	 * those, the signature is split out instead -- item->signatureArgsText
-	 * (FUNCTION/PROCEDURE/AGGREGATE) or item->operatorLeftArg/RightArg
-	 * (OPERATOR) -- so check whichever of those applies too. Matching is
-	 * still a plain substring search, not a parse of the argument list:
-	 * pg_dump's own TOC format doesn't split out individual argument
-	 * types either, and going that far isn't worth it (see this PR's own
-	 * description for why).
+	 * "functions/casts/transforms with parameters of this type": item->name
+	 * holds the whole opaque signature text for a top-level CAST/USER
+	 * MAPPING/DEFAULT ACL/TRANSFORM entry still (see archive_toc_parser.c's
+	 * ARCHIVE_SHAPE_OPAQUE and applyTopLevelSignatureExtras -- those don't
+	 * narrow item->name itself, only add further fields alongside it); for
+	 * FUNCTION/PROCEDURE/AGGREGATE (either the plain entry or its ACL/
+	 * COMMENT), the signature is split out instead -- item->
+	 * signatureArgsText -- and for OPERATOR, item->operatorLeftArg/
+	 * RightArg, for CAST/TRANSFORM, item->castSourceType/TargetType and
+	 * item->transformType -- so check whichever of those applies too.
+	 * Matching is still a plain substring search, not a parse of the
+	 * argument list: pg_dump's own TOC format doesn't split out individual
+	 * argument types either, and going that far isn't worth it (see this
+	 * PR's own description for why).
 	 */
 	if (!skip && !IS_EMPTY_STRING_BUFFER(listDBoptions.tocTypePattern))
 	{
@@ -2446,7 +2449,12 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 			(item->operatorHasLeftArg &&
 			 strstr(item->operatorLeftArg, pattern) != NULL) ||
 			(item->operatorHasRightArg &&
-			 strstr(item->operatorRightArg, pattern) != NULL);
+			 strstr(item->operatorRightArg, pattern) != NULL) ||
+			(item->castSourceType != NULL &&
+			 (strstr(item->castSourceType, pattern) != NULL ||
+			  strstr(item->castTargetType, pattern) != NULL)) ||
+			(item->transformType != NULL &&
+			 strstr(item->transformType, pattern) != NULL);
 
 		if (!found)
 		{
@@ -2516,6 +2524,47 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 				json_object_set_string(jsobj, "rightArg",
 									   item->operatorHasRightArg
 									   ? item->operatorRightArg : "");
+			}
+
+			/*
+			 * Phase 4 "overlapping fields" (see pgcmd.h): CAST, USER
+			 * MAPPING, DEFAULT ACL, TRANSFORM, and an OPERATOR CLASS/
+			 * FAMILY ACL/COMMENT's own access method.
+			 */
+			if (item->castSourceType != NULL)
+			{
+				json_object_set_string(jsobj, "castSourceType",
+									   item->castSourceType);
+				json_object_set_string(jsobj, "castTargetType",
+									   item->castTargetType);
+			}
+
+			if (!IS_EMPTY_STRING_BUFFER(item->userMappingUser))
+			{
+				json_object_set_string(jsobj, "userMappingUser",
+									   item->userMappingUser);
+				json_object_set_string(jsobj, "userMappingServer",
+									   item->userMappingServer);
+			}
+
+			if (!IS_EMPTY_STRING_BUFFER(item->defaultAclObjectType))
+			{
+				json_object_set_string(jsobj, "defaultAclObjectType",
+									   item->defaultAclObjectType);
+			}
+
+			if (item->transformType != NULL)
+			{
+				json_object_set_string(jsobj, "transformType",
+									   item->transformType);
+				json_object_set_string(jsobj, "transformLanguage",
+									   item->transformLanguage);
+			}
+
+			if (!IS_EMPTY_STRING_BUFFER(item->accessMethod))
+			{
+				json_object_set_string(jsobj, "accessMethod",
+									   item->accessMethod);
 			}
 
 			char *serialized = json_serialize_to_string(js);

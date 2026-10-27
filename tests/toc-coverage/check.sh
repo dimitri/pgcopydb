@@ -17,8 +17,14 @@
 #
 #   2. A handful of specific entries -- the ones this script exists to
 #      guard, see fixture.sql's own comments for why each was added --
-#      come back with the exact structured fields (name/args/argsList/
-#      leftArg/rightArg) a correct parse requires, via --json.
+#      come back with the exact structured fields via --json: name/args/
+#      argsList/leftArg/rightArg (Phase 1-3, FUNCTION/PROCEDURE/AGGREGATE/
+#      OPERATOR signatures), and, as of Phase 4, the same signature split
+#      applied to the plain (non-ACL/COMMENT) FUNCTION/PROCEDURE/AGGREGATE
+#      tag itself, plus castSourceType/TargetType, userMappingUser/Server,
+#      defaultAclObjectType, transformType/Language and accessMethod for
+#      CAST, USER MAPPING, DEFAULT ACL, TRANSFORM and OPERATOR CLASS/
+#      FAMILY.
 
 set -euo pipefail
 
@@ -122,6 +128,60 @@ check_field "prefix OPERATOR @-@ left arg absent" \
 check_field "binary OPERATOR === both args" \
     '"name":"==="' \
     '"leftArg":"integer","rightArg":"integer"'
+
+# Phase 4: the plain (non-ACL/COMMENT) FUNCTION/PROCEDURE/AGGREGATE tag's
+# own signature, "fixture_add(integer, integer)", splits the same way its
+# ACL/COMMENT counterpart already does above -- bare type names only, no
+# argmode/argname (format_function_signature's own shape, not pg_get_
+# function_identity_arguments()'s).
+check_field "plain FUNCTION fixture_add signature split" \
+    '"tag":"FUNCTION","schema":"toc_fixture","relation":"","name":"fixture_add"' \
+    '"args":"integer, integer","argsList":["integer","integer"]'
+
+# CAST (toc_fixture.positive_int AS integer): both the plain entry and its
+# COMMENT split into castSourceType/castTargetType.
+check_field "plain CAST source/target split" \
+    '"tag":"CAST"' \
+    '"castSourceType":"toc_fixture.positive_int","castTargetType":"integer"'
+
+check_field "COMMENT ON CAST source/target split" \
+    '"tag":"COMMENT","schema":"","relation":"","name":"(toc_fixture.positive_int AS integer)"' \
+    '"castSourceType":"toc_fixture.positive_int","castTargetType":"integer"'
+
+# USER MAPPING postgres SERVER fixture_server: splits into user/server.
+check_field "USER MAPPING user/server split" \
+    '"tag":"USER MAPPING"' \
+    '"userMappingUser":"postgres","userMappingServer":"fixture_server"'
+
+# DEFAULT PRIVILEGES FOR TABLES: splits out the fixed object-type word.
+check_field "DEFAULT ACL object type split" \
+    '"tag":"DEFAULT ACL"' \
+    '"defaultAclObjectType":"TABLES"'
+
+# TRANSFORM FOR integer LANGUAGE plpgsql: both the plain entry and its
+# COMMENT split into transformType/transformLanguage. See
+# https://www.postgresql.org/docs/current/sql-createtransform.html --
+# a TRANSFORM tells a procedural language (here, a fixture-only
+# do-nothing C extension standing in for PL/Python or PL/Perl, see
+# fixture_transform_ext/README) how to convert a given SQL type to and
+# from that language's own native representation.
+check_field "plain TRANSFORM type/language split" \
+    '"tag":"TRANSFORM"' \
+    '"transformType":"integer","transformLanguage":"plpgsql"'
+
+check_field "COMMENT ON TRANSFORM type/language split" \
+    '"tag":"COMMENT","schema":"","relation":"","name":"FOR integer LANGUAGE plpgsql"' \
+    '"transformType":"integer","transformLanguage":"plpgsql"'
+
+# COMMENT ON OPERATOR FAMILY/CLASS ... USING btree: narrows name down to
+# the bare object name and splits out the access method.
+check_field "OPERATOR FAMILY USING split" \
+    '"tag":"COMMENT","schema":"toc_fixture","relation":"","name":"fixture_int_ops"' \
+    '"accessMethod":"btree"'
+
+check_field "OPERATOR CLASS USING split" \
+    '"tag":"COMMENT","schema":"toc_fixture","relation":"","name":"fixture_int_ops_class"' \
+    '"accessMethod":"btree"'
 
 echo
 echo "All toc-coverage checks passed."

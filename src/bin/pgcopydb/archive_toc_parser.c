@@ -110,7 +110,7 @@ static const ArchiveTocShapeEntry archiveTocShapeTable[] = {
 	{ ARCHIVE_TAG_TEXT_SEARCH_DICTIONARY, ARCHIVE_SHAPE_SIMPLE }, /* (*) */
 	{ ARCHIVE_TAG_TEXT_SEARCH_PARSER, ARCHIVE_SHAPE_SIMPLE },
 	{ ARCHIVE_TAG_TEXT_SEARCH_TEMPLATE, ARCHIVE_SHAPE_SIMPLE },
-	{ ARCHIVE_TAG_TRANSFORM, ARCHIVE_SHAPE_SIMPLE },
+	{ ARCHIVE_TAG_TRANSFORM, ARCHIVE_SHAPE_OPAQUE },             /* (*) */
 	{ ARCHIVE_TAG_TRIGGER, ARCHIVE_SHAPE_RELATION },              /* (*) */
 	{ ARCHIVE_TAG_TYPE, ARCHIVE_SHAPE_SIMPLE },
 	{ ARCHIVE_TAG_USER_MAPPING, ARCHIVE_SHAPE_OPAQUE },          /* (*) */
@@ -325,6 +325,262 @@ splitAclOrCommentOpaqueNameAndOwner(const char *remainder,
 	strlcpy(item->name, buffer, sizeof(item->name));
 
 	return true;
+}
+
+
+/*
+ * splitOnMarker finds the first occurrence of `marker` in `text` and
+ * splits around it: *beforeOut gets everything before it, *afterOut
+ * everything after, both freshly malloc'ed (the caller's to free, or to
+ * hand off to an ArchiveContentItem field). Returns false (leaving both
+ * outputs unset) when the marker isn't found, so callers can fall back to
+ * leaving the field opaque -- the same "not supported, caller still has
+ * the raw text" convention every other split function in this file
+ * follows. Used for every Phase 4 "X <literal keyword> Y" shape below
+ * (CAST's " AS ", TRANSFORM's " LANGUAGE ", USER MAPPING's " SERVER "):
+ * same risk profile as the "ON"/"USING" literal markers
+ * parseAclOrCommentRemainder and splitOperatorClassFamilyUsing already
+ * rely on -- a name containing the marker text itself as a substring
+ * would be misparsed, but pg_dump's own identifiers practically never do.
+ */
+static bool
+splitOnMarker(const char *text, const char *marker, char **beforeOut,
+			  char **afterOut)
+{
+	char *pos = strstr(text, marker);
+
+	if (pos == NULL)
+	{
+		return false;
+	}
+
+	size_t beforeLen = pos - text;
+
+	char *before = (char *) calloc(beforeLen + 1, sizeof(char));
+	char *after = strdup(pos + strlen(marker));
+
+	if (before == NULL || after == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		free(before);
+		free(after);
+		return false;
+	}
+
+	strlcpy(before, text, beforeLen + 1);
+
+	*beforeOut = before;
+	*afterOut = after;
+
+	return true;
+}
+
+
+/*
+ * splitCastTypes splits a CAST's own "(sourcetype AS targettype)" text
+ * (parens included) into item->castSourceType/castTargetType. Used both
+ * for the plain top-level CAST entry (applyTopLevelSignatureExtras,
+ * after stripping the repeated "CAST " prefix pg_dump's own labelq
+ * includes, see dumpCast in pg_dump.c) and for a COMMENT ON CAST's
+ * nested remainder (parseAclOrCommentRemainder), which has no such
+ * prefix to strip (dumpComment is called with castargs, not labelq).
+ */
+static bool
+splitCastTypes(const char *parenText, ArchiveContentItem *item)
+{
+	size_t len = strlen(parenText);
+
+	if (len < 2 || parenText[0] != '(' || parenText[len - 1] != ')')
+	{
+		return false;
+	}
+
+	char inner[2 * PG_NAMEDATALEN + BUFSIZE] = { 0 };
+
+	strlcpy(inner, parenText + 1, sizeof(inner));
+
+	size_t innerLen = strlen(inner);
+
+	if (innerLen > 0)
+	{
+		inner[innerLen - 1] = '\0';
+	}
+
+	char *source = NULL;
+	char *target = NULL;
+
+	if (!splitOnMarker(inner, " AS ", &source, &target))
+	{
+		return false;
+	}
+
+	item->castSourceType = source;
+	item->castTargetType = target;
+
+	return true;
+}
+
+
+/*
+ * splitOperatorClassFamilyUsing narrows an OPERATOR CLASS/FAMILY ACL or
+ * COMMENT entry's opaque item->name (already split from its owner by
+ * splitAclOrCommentOpaqueNameAndOwner, e.g. "fixture_int_ops_class USING
+ * btree") down to the bare object name, moving the access method name
+ * into item->accessMethod -- dumpOpclass/dumpOpfamily's own "%s USING
+ * %s" shape for an ACL/COMMENT entry's remainder (pg_dump.c; the plain,
+ * non-ACL/COMMENT entry has no such suffix at all, see pgcmd.h's own
+ * note on accessMethod). Does nothing when the expected " USING " marker
+ * isn't found.
+ */
+static void
+splitOperatorClassFamilyUsing(ArchiveContentItem *item)
+{
+	char *marker = strstr(item->name, " USING ");
+
+	if (marker == NULL)
+	{
+		return;
+	}
+
+	strlcpy(item->accessMethod, marker + strlen(" USING "),
+			sizeof(item->accessMethod));
+
+	*marker = '\0';
+}
+
+
+/*
+ * splitTransformNested splits a COMMENT ON TRANSFORM's own nested
+ * remainder, "FOR typename LANGUAGE langname" (dumpTransform's own
+ * transformargs, no repeated "TRANSFORM " prefix -- unlike the plain
+ * top-level entry's labelq, see applyTopLevelSignatureExtras and pg_dump.c),
+ * into item->transformType/transformLanguage.
+ */
+static void
+splitTransformNested(ArchiveContentItem *item)
+{
+	const char *prefix = "FOR ";
+
+	if (strncmp(item->name, prefix, strlen(prefix)) != 0)
+	{
+		return;
+	}
+
+	char *type = NULL;
+	char *lang = NULL;
+
+	if (splitOnMarker(item->name + strlen(prefix), " LANGUAGE ", &type, &lang))
+	{
+		item->transformType = type;
+		strlcpy(item->transformLanguage, lang, sizeof(item->transformLanguage));
+		free(lang);
+	}
+}
+
+
+/*
+ * applyTopLevelSignatureExtras applies the Phase 4 "overlapping fields"
+ * split (see pgcmd.h's own note just above castSourceType) to a plain,
+ * non-ACL/COMMENT entry's already-opaque item->name, for the handful of
+ * tags whose plain tag text has further regular structure of its own.
+ * Called from archive_toc_parse_line right after splitSimpleOrRelation
+ * Remainder succeeds; a no-op for every tag not listed below, and not
+ * fatal when a listed tag's text doesn't match the expected shape (e.g.
+ * a future pg_dump version changing the tag format) -- item->name is
+ * left as the whole opaque text either way, exactly as it already was
+ * before Phase 4.
+ */
+static void splitPlainFunctionSignature(ArchiveContentItem *item);
+
+static void
+applyTopLevelSignatureExtras(ArchiveContentItem *item)
+{
+	switch (item->desc)
+	{
+		case ARCHIVE_TAG_FUNCTION:
+		case ARCHIVE_TAG_PROCEDURE:
+		case ARCHIVE_TAG_AGGREGATE:
+		{
+			splitPlainFunctionSignature(item);
+			break;
+		}
+
+		case ARCHIVE_TAG_CAST:
+		{
+			const char *prefix = "CAST ";
+
+			if (strncmp(item->name, prefix, strlen(prefix)) == 0)
+			{
+				splitCastTypes(item->name + strlen(prefix), item);
+			}
+
+			break;
+		}
+
+		case ARCHIVE_TAG_USER_MAPPING:
+		{
+			const char *prefix = "USER MAPPING ";
+
+			if (strncmp(item->name, prefix, strlen(prefix)) == 0)
+			{
+				char *user = NULL;
+				char *server = NULL;
+
+				if (splitOnMarker(item->name + strlen(prefix), " SERVER ",
+								  &user, &server))
+				{
+					strlcpy(item->userMappingUser, user,
+							sizeof(item->userMappingUser));
+					strlcpy(item->userMappingServer, server,
+							sizeof(item->userMappingServer));
+					free(user);
+					free(server);
+				}
+			}
+
+			break;
+		}
+
+		case ARCHIVE_TAG_DEFAULT_ACL:
+		{
+			const char *prefix = "DEFAULT PRIVILEGES FOR ";
+
+			if (strncmp(item->name, prefix, strlen(prefix)) == 0)
+			{
+				strlcpy(item->defaultAclObjectType, item->name + strlen(prefix),
+						sizeof(item->defaultAclObjectType));
+			}
+
+			break;
+		}
+
+		case ARCHIVE_TAG_TRANSFORM:
+		{
+			const char *prefix = "TRANSFORM FOR ";
+
+			if (strncmp(item->name, prefix, strlen(prefix)) == 0)
+			{
+				char *type = NULL;
+				char *lang = NULL;
+
+				if (splitOnMarker(item->name + strlen(prefix), " LANGUAGE ",
+								  &type, &lang))
+				{
+					item->transformType = type;
+					strlcpy(item->transformLanguage, lang,
+							sizeof(item->transformLanguage));
+					free(lang);
+				}
+			}
+
+			break;
+		}
+
+		default:
+		{
+			break;
+		}
+	}
 }
 
 
@@ -648,6 +904,69 @@ splitFunctionArgs(const char *argsText, ArchiveContentItem *item)
 
 
 /*
+ * splitPlainFunctionSignature splits a top-level (non-ACL/COMMENT)
+ * FUNCTION/PROCEDURE/AGGREGATE entry's own opaque item->name -- e.g.
+ * "fixture_add(integer, integer)", already isolated by
+ * splitSimpleOrRelationRemainder -- into the bare function name (still
+ * in item->name, that field's existing contract) and its argument-list
+ * text (item->signatureArgsText/signatureArgs, the same fields
+ * finishFunctionLikeAclOrComment below already populates for the
+ * ACL/COMMENT-wrapped case -- see pgcmd.h's own note on that pair for
+ * how the two cases differ in content, not shape).
+ *
+ * Unlike the ACL/COMMENT case, this name is never fmtId()-quoted
+ * (format_function_signature's own honor_quotes=false, "appropriate for
+ * use in TOC tags" -- see pg_dump.c) even when it would need to be (e.g.
+ * a name with an embedded space, see tests/toc-coverage/fixture.sql's
+ * "Fixture Weird Fn"), so the only safe boundary between the name and
+ * its argument list is the first '(' -- a function/aggregate name can't
+ * itself contain a literal '(' -- not "first space", which Phase 1-3's
+ * OBJTYPEBODY lexer state relies on for the (always quoted-when-needed)
+ * ACL/COMMENT case.
+ *
+ * Does nothing (leaves item->name as the whole opaque text) when the
+ * expected trailing ")" isn't found -- same "not supported yet"
+ * convention as every other split function here.
+ */
+static void
+splitPlainFunctionSignature(ArchiveContentItem *item)
+{
+	char *open = strchr(item->name, '(');
+	size_t nameLen = strlen(item->name);
+
+	if (open == NULL || nameLen == 0 || item->name[nameLen - 1] != ')')
+	{
+		return;
+	}
+
+	char argsText[BUFSIZE] = { 0 };
+	size_t argsLen = (item->name + nameLen - 1) - (open + 1);
+
+	if (argsLen >= sizeof(argsText))
+	{
+		return;
+	}
+
+	strlcpy(argsText, open + 1, argsLen + 1);
+	*open = '\0';
+
+	item->signatureArgsText = strdup(argsText);
+
+	if (item->signatureArgsText == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return;
+	}
+
+	if (!splitFunctionArgs(argsText, item))
+	{
+		log_debug("archive_toc_parser: could not split function args \"%s\"",
+				  argsText);
+	}
+}
+
+
+/*
  * finishFunctionLikeAclOrComment finishes parsing an ACL/COMMENT entry on
  * a FUNCTION, PROCEDURE or AGGREGATE, once its own name and the raw text
  * of its balanced-parentheses argument list have already been pulled by
@@ -877,6 +1196,107 @@ finishOperatorAclOrComment(ArchiveContentItem *item, const char *nspname,
 
 	sformat(item->useListRemainder, ulrBytes, "%s %s %s (%s) %s",
 			nspname, item->objectTypeText, symbol, argsText, owner);
+
+	return true;
+}
+
+
+/*
+ * pullOpaqueObjectTypeRemainder pulls the one REMAINDER token left after
+ * an ACL/COMMENT entry's object type keyword (CAST, TRANSFORM, OPERATOR
+ * CLASS/FAMILY, or the generic `default:` case's TYPE/DOMAIN/... --
+ * none of these own an identifier of their own per archive_toc_object_
+ * type_has_ident, so the lexer never switched to OBJTYPEBODY for them),
+ * strips its single leading space, and splits it into item->name/owner
+ * via splitAclOrCommentOpaqueNameAndOwner. *objTypeRemainderOut is set to
+ * the raw (unmodified) text on success, for buildOpaqueAclOrCommentNames
+ * below to reproduce verbatim in useListRemainder.
+ */
+static bool
+pullOpaqueObjectTypeRemainder(ArchiveContentItem *item,
+							  const char **objTypeRemainderOut)
+{
+	if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
+	{
+		return false;
+	}
+
+	const char *objTypeRemainder = archive_toc_text;
+
+	if (*objTypeRemainder == ' ')
+	{
+		objTypeRemainder++;
+	}
+
+	if (!splitAclOrCommentOpaqueNameAndOwner(objTypeRemainder, item))
+	{
+		return false;
+	}
+
+	*objTypeRemainderOut = objTypeRemainder;
+
+	return true;
+}
+
+
+/*
+ * buildOpaqueAclOrCommentNames builds item->restoreListName and
+ * item->useListRemainder for an ACL/COMMENT entry whose object type's own
+ * remainder has already been split into item->name/owner by
+ * splitAclOrCommentOpaqueNameAndOwner -- optionally narrowed further by a
+ * Phase 4 helper first (splitCastTypes, splitOperatorClassFamilyUsing,
+ * splitTransformNested), the same way finishRelationAclOrComment's own
+ * relname/name narrow restoreListName without losing the full original
+ * text, which objTypeRemainder (unmodified raw text, not item->name)
+ * still provides to useListRemainder below. Shared by the CAST, TRANSFORM,
+ * OPERATOR CLASS/FAMILY cases and the generic `default:` case in
+ * parseAclOrCommentRemainder, below.
+ */
+static bool
+buildOpaqueAclOrCommentNames(ArchiveContentItem *item, bool hasNamespace,
+							 const char *nspname, const char *objTypeRemainder)
+{
+	const char *rlNamespace = hasNamespace ? nspname : "-";
+
+	/*
+	 * restoreListName stays narrow and keyword-free, the same convention
+	 * finishRelationAclOrComment uses ("nspname relname owner") -- even
+	 * though no filters catalog currently populates restore_list_name
+	 * rows for these object types (list_collations.sql/list_source_
+	 * sequences.sql are the only two that do), so this is inert for
+	 * filtering today, exactly as the old full-remainder fallback was.
+	 */
+	size_t bytes = strlen(rlNamespace) + 1 + strlen(item->name) + 1 +
+				   strlen(item->owner) + 1;
+
+	item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+	if (item->restoreListName == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	sformat(item->restoreListName, bytes, "%s %s %s",
+			rlNamespace, item->name, item->owner);
+
+	item->tagType = ARCHIVE_TAG_TYPE_OTHER;
+
+	/* useListRemainder reproduces the full original line, as ever */
+	size_t ulrBytes = strlen(rlNamespace) + 1 +
+					  strlen(item->objectTypeText) + 1 +
+					  strlen(objTypeRemainder) + 1;
+
+	item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
+
+	if (item->useListRemainder == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	sformat(item->useListRemainder, ulrBytes, "%s %s %s",
+			rlNamespace, item->objectTypeText, objTypeRemainder);
 
 	return true;
 }
@@ -1269,6 +1689,60 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 			return finishOperatorAclOrComment(item, nspname, symbol, argsText);
 		}
 
+		case ARCHIVE_TAG_CAST:
+		{
+			/* COMMENT ON CAST only -- a CAST can't be GRANTed on */
+			const char *objTypeRemainder = NULL;
+
+			if (!pullOpaqueObjectTypeRemainder(item, &objTypeRemainder))
+			{
+				return false;
+			}
+
+			splitCastTypes(item->name, item);
+
+			return buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
+												objTypeRemainder);
+		}
+
+		case ARCHIVE_TAG_TRANSFORM:
+		{
+			/* COMMENT ON TRANSFORM only -- same reason as CAST above */
+			const char *objTypeRemainder = NULL;
+
+			if (!pullOpaqueObjectTypeRemainder(item, &objTypeRemainder))
+			{
+				return false;
+			}
+
+			splitTransformNested(item);
+
+			return buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
+												objTypeRemainder);
+		}
+
+		case ARCHIVE_TAG_OPERATOR_CLASS:
+		case ARCHIVE_TAG_OPERATOR_FAMILY:
+		{
+			/*
+			 * "name USING amname" (dumpOpclass/dumpOpfamily, pg_dump.c) --
+			 * narrow item->name down to the bare object name and move the
+			 * access method into item->accessMethod, same "overlapping
+			 * fields" split as CAST/TRANSFORM above (see pgcmd.h).
+			 */
+			const char *objTypeRemainder = NULL;
+
+			if (!pullOpaqueObjectTypeRemainder(item, &objTypeRemainder))
+			{
+				return false;
+			}
+
+			splitOperatorClassFamilyUsing(item);
+
+			return buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
+												objTypeRemainder);
+		}
+
 		default:
 		{
 			/*
@@ -1277,81 +1751,30 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 			 * ARCHIVE_SHAPE_SIMPLE the same way splitSimpleOrRelationRemainder
 			 * does for a top-level entry of the same tag -- their own name
 			 * can contain embedded spaces, but the owner is still reliably
-			 * the last space-delimited token. FUNCTION/PROCEDURE/AGGREGATE
-			 * and OPERATOR have their own dedicated cases above instead,
-			 * since their own argument list genuinely has lexable structure
-			 * (a balanced-parentheses group), unlike these. Genuinely
-			 * irregular ARCHIVE_SHAPE_OPAQUE/RELATION tags (CAST,
-			 * USER_MAPPING, DEFAULT_ACL, ...) don't meaningfully occur
-			 * inside an ACL/COMMENT and are left unsplit, falling back to
-			 * the raw remainder as restoreListName, as they always have.
+			 * the last space-delimited token. FUNCTION/PROCEDURE/AGGREGATE,
+			 * OPERATOR, CAST, TRANSFORM, OPERATOR CLASS/FAMILY have their
+			 * own dedicated cases above instead, since their own remainder
+			 * has further regular structure worth splitting out. USER_
+			 * MAPPING and DEFAULT_ACL genuinely never reach this function
+			 * at all: they're each their own distinct outer tag (not ACL
+			 * or COMMENT), handled by applyTopLevelSignatureExtras instead
+			 * -- neither a user mapping nor a default ACL entry can itself
+			 * be GRANTed on or COMMENTed on.
 			 */
 			if (archive_toc_shape_for_desc(objectType) != ARCHIVE_SHAPE_SIMPLE)
 			{
 				return false;
 			}
 
-			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
+			const char *objTypeRemainder = NULL;
+
+			if (!pullOpaqueObjectTypeRemainder(item, &objTypeRemainder))
 			{
 				return false;
 			}
 
-			const char *objTypeRemainder = archive_toc_text;
-
-			if (*objTypeRemainder == ' ')
-			{
-				objTypeRemainder++;
-			}
-
-			if (!splitAclOrCommentOpaqueNameAndOwner(objTypeRemainder, item))
-			{
-				return false;
-			}
-
-			const char *rlNamespace = hasNamespace ? nspname : "-";
-
-			/*
-			 * restoreListName stays narrow and keyword-free, the same
-			 * convention finishRelationAclOrComment uses ("nspname relname
-			 * owner") -- even though no filters catalog currently
-			 * populates restore_list_name rows for these object types
-			 * (list_collations.sql/list_source_sequences.sql are the only
-			 * two that do), so this is inert for filtering today, exactly
-			 * as the old full-remainder fallback was.
-			 */
-			size_t bytes = strlen(rlNamespace) + 1 + strlen(item->name) + 1 +
-						   strlen(item->owner) + 1;
-
-			item->restoreListName = (char *) calloc(bytes, sizeof(char));
-
-			if (item->restoreListName == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			sformat(item->restoreListName, bytes, "%s %s %s",
-					rlNamespace, item->name, item->owner);
-
-			item->tagType = ARCHIVE_TAG_TYPE_OTHER;
-
-			/* useListRemainder reproduces the full original line, as ever */
-			size_t ulrBytes = strlen(rlNamespace) + 1 +
-							  strlen(item->objectTypeText) + 1 +
-							  strlen(objTypeRemainder) + 1;
-
-			item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
-
-			if (item->useListRemainder == NULL)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				return false;
-			}
-
-			sformat(item->useListRemainder, ulrBytes, "%s %s %s",
-					rlNamespace, item->objectTypeText, objTypeRemainder);
-
-			return true;
+			return buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
+												objTypeRemainder);
 		}
 	}
 }
@@ -1524,6 +1947,10 @@ archive_toc_parse_line(const char *line, ArchiveContentItem *item)
 			log_debug("archive_toc_parser: could not split remainder "
 					  "for %s: %s", item->description ? item->description :
 					  "(unknown tag)", item->restoreListName);
+		}
+		else
+		{
+			applyTopLevelSignatureExtras(item);
 		}
 	}
 
