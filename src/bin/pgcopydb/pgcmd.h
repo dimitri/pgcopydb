@@ -234,6 +234,22 @@ typedef struct ArchiveContentItem
 	 * remainder, parsed per TAG2's shape, not the outer ACL/COMMENT tag.
 	 */
 	ArchiveItemDesc innerDesc;
+	char *innerDescText;         /* malloc'ed area; TAG2's own raw keyword
+	                              * text (e.g. "COLUMN", "TRIGGER"), the same
+	                              * way description is the outer tag's */
+
+	/*
+	 * Set when shape == ARCHIVE_SHAPE_ACL_OR_COMMENT: the full original
+	 * remainder text, TAG2 included, exactly as pg_restore --list would
+	 * print it (e.g. "toc_fixture COLUMN parent.name postgres"). Distinct
+	 * from restoreListName on purpose: that field deliberately holds only
+	 * the *relation's* own name for filtering (see
+	 * finishRelationAclOrComment in archive_toc_parser.c), not a faithful
+	 * reproduction of this entry's own line -- useListRemainder is the
+	 * latter, for callers (e.g. --use-list) that need to write the line
+	 * back out.
+	 */
+	char *useListRemainder;      /* malloc'ed area */
 } ArchiveContentItem;
 
 

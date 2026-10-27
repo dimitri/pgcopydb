@@ -334,6 +334,45 @@ finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
 	strlcpy(item->owner, owner, sizeof(item->owner));
 	item->tagType = ARCHIVE_TAG_TYPE_OTHER;
 
+	/*
+	 * useListRemainder reproduces the full original line, TAG2 included,
+	 * unlike restoreListName above (see the field's own comment in
+	 * pgcmd.h): the body differs by TAG2's own shape --
+	 *
+	 *   name empty:               "relname"            (TABLE, VIEW, ...)
+	 *   TAG2 is COLUMN:           "relname.name"
+	 *   TAG2 is CONSTRAINT/etc.:  "name ON relname"
+	 */
+	char body[2 * PG_NAMEDATALEN + 8] = { 0 };
+
+	if (IS_EMPTY_STRING_BUFFER(name))
+	{
+		strlcpy(body, relname, sizeof(body));
+	}
+	else if (item->innerDesc == ARCHIVE_TAG_COLUMN)
+	{
+		sformat(body, sizeof(body), "%s.%s", relname, name);
+	}
+	else
+	{
+		sformat(body, sizeof(body), "%s ON %s", name, relname);
+	}
+
+	size_t ulrBytes =
+		strlen(nspname) + 1 + strlen(item->innerDescText) + 1 +
+		strlen(body) + 1 + strlen(owner) + 1;
+
+	item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
+
+	if (item->useListRemainder == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	sformat(item->useListRemainder, ulrBytes, "%s %s %s %s",
+			nspname, item->innerDescText, body, owner);
+
 	return true;
 }
 
@@ -421,6 +460,14 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 	ArchiveItemDesc tag2 = archive_toc_last_desc;
 
 	item->innerDesc = tag2;
+	item->innerDescText = strdup(archive_toc_last_desc_text);
+
+	if (item->innerDescText == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
 	item->hasNamespace = hasNamespace;
 	strlcpy(item->nspname, nspname, sizeof(item->nspname));
 
@@ -453,6 +500,19 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 			sformat(item->restoreListName, bytes, "- %s", tag2Remainder);
 			item->tagType = ARCHIVE_TAG_TYPE_SCHEMA;
+
+			size_t ulrBytes = strlen(item->innerDescText) + strlen(tag2Remainder) + 4;
+
+			item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
+
+			if (item->useListRemainder == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			sformat(item->useListRemainder, ulrBytes, "- %s %s",
+					item->innerDescText, tag2Remainder);
 
 			return true;
 		}
@@ -497,6 +557,24 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 			strlcpy(item->name, extname, sizeof(item->name));
 			item->tagType = ARCHIVE_TAG_TYPE_EXTENSION;
+
+			/*
+			 * tag2Remainder, not extname: pg_restore keeps the trailing
+			 * space after the extension name even with no owner to
+			 * follow it, and useListRemainder reproduces the line as-is.
+			 */
+			size_t ulrBytes = strlen(item->innerDescText) + strlen(tag2Remainder) + 4;
+
+			item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
+
+			if (item->useListRemainder == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			sformat(item->useListRemainder, ulrBytes, "- %s %s",
+					item->innerDescText, tag2Remainder);
 
 			return true;
 		}

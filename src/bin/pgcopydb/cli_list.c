@@ -2493,13 +2493,25 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 	{
 		PQExpBuffer buf = createPQExpBuffer();
 
+		/*
+		 * useListRemainder, when set, is the faithful original-line text
+		 * (TAG2 included for an ACL/COMMENT entry); restoreListName is
+		 * deliberately not that for those entries (see its own comment in
+		 * pgcmd.h), so only fall back to it for entries that have no
+		 * useListRemainder at all -- every non-ACL/COMMENT shape.
+		 */
+		const char *remainder =
+			item->useListRemainder != NULL
+			? item->useListRemainder
+			: (item->restoreListName != NULL ? item->restoreListName : "");
+
 		printfPQExpBuffer(buf, "%s%d; %u %u %s %s\n",
 						  skip ? ";" : "",
 						  item->dumpId,
 						  item->catalogOid,
 						  item->objectOid,
 						  item->description ? item->description : "",
-						  item->restoreListName != NULL ? item->restoreListName : "");
+						  remainder);
 
 		if (PQExpBufferBroken(buf))
 		{
