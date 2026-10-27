@@ -302,15 +302,13 @@ copydb_index_worker(CopyDataSpec *specs)
 	{
 		char *pguri = specs->connStrings.target_pguri;
 
+		/*
+		 * Only set up the connection string here; the connection itself is
+		 * opened lazily per index, right before it's needed, and closed
+		 * again right after. See the QMSG_TYPE_INDEXOID case below for why.
+		 */
 		if (!pgsql_init(&dst, (char *) pguri, PGSQL_CONN_TARGET))
 		{
-			return false;
-		}
-
-		if (!pgsql_set_gucs(&dst, dstSettings))
-		{
-			log_fatal("Failed to set our GUC settings on the target connection, "
-					  "see above for details");
 			return false;
 		}
 	}
@@ -379,7 +377,63 @@ copydb_index_worker(CopyDataSpec *specs)
 					useDst = &entry->dst;
 				}
 
-				if (!copydb_create_index_by_oid(useSpecs, useDst, oid))
+				/*
+				 * Connect only for as long as it takes to create this one
+				 * index, rather than holding the connection open across the
+				 * wait for the next index to show up on the queue: that
+				 * wait follows the whole table's COPY and can last hours,
+				 * plenty of time for the network or the server itself to
+				 * close an idle connection out from under us. There is
+				 * nothing to gain from keeping it open while there is no
+				 * work to do, so don't try to detect and recover from that
+				 * after the fact -- just never leave it idle in the first
+				 * place.
+				 */
+				bool ok = pgsql_set_gucs(useDst, dstSettings) &&
+						  copydb_create_index_by_oid(useSpecs, useDst, oid);
+
+				/*
+				 * Keep the connection open when another index is already
+				 * waiting on the queue: there's no idle time to avoid in
+				 * that case, and disconnecting would just add a round trip
+				 * before the next CREATE INDEX for nothing. This is a
+				 * snapshot -- with --index-jobs > 1, a sibling worker can
+				 * race us for that message -- but the race only ever costs
+				 * a few extra idle milliseconds on this connection, never
+				 * the unbounded wait for the next table's COPY to finish
+				 * that this function exists to avoid.
+				 *
+				 * Single-db only: queue_stats() reports that *some* message
+				 * is waiting, not which database it's for. In the
+				 * --all-databases pool, the next message can belong to a
+				 * different datname than useDst, whose own CREATE INDEX
+				 * might then run for hours while this connection -- no
+				 * longer in use by anyone, and not closed -- sits genuinely
+				 * idle the whole time. That's precisely the bug this
+				 * function exists to avoid, just moved to a connection
+				 * other than the one currently busy. Checking "is the next
+				 * message for this same datname" would need to actually
+				 * consume it to know, and there's no portable non-
+				 * destructive peek for that, so keep this to the one case
+				 * where "more work" and "more work for this connection" are
+				 * the same thing: there's only one target connection at all
+				 * on the single-db path.
+				 */
+				bool moreWork = false;
+
+				if (!specs->allDatabases)
+				{
+					QueueStats stats = { 0 };
+					moreWork = queue_stats(&(specs->indexQueue), &stats) &&
+							   stats.msg_qnum > 0;
+				}
+
+				if (!moreWork)
+				{
+					(void) pgsql_finish(useDst);
+				}
+
+				if (!ok)
 				{
 					++errors;
 
@@ -389,7 +443,6 @@ copydb_index_worker(CopyDataSpec *specs)
 
 					if (specs->failFast)
 					{
-						(void) pgsql_finish(&dst);
 						(void) multidb_index_context_close_all(&idxCtx);
 						return false;
 					}
