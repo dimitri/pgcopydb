@@ -259,6 +259,35 @@ typedef struct ArchiveContentItem
 	 * back out.
 	 */
 	char *useListRemainder;      /* malloc'ed area */
+
+	/*
+	 * Set when objectType (above) is FUNCTION, PROCEDURE or AGGREGATE:
+	 * the raw text pg_dump wrote between name's own parentheses, and
+	 * that same text split on its top-level commas (a nested pair from a
+	 * type's own typmod, e.g. "numeric(10,2)", isn't a boundary) into one
+	 * string per argument -- see archive_toc_parser.c's splitFunctionArgs.
+	 * Each argument is kept verbatim, "[argmode] [argname] argtype" as
+	 * pg_get_function_identity_arguments() printed it (what pg_dump's own
+	 * dumpComment/dumpACL use): argtype is a full Postgres type-name
+	 * expression, not a lexable token, so we go no further than this
+	 * (see the file's own naming note). A zero-argument aggregate's
+	 * literal "(*)" (format_function_arguments' own special case, not a
+	 * real argument) is signatureArgsCount == 0, signatureArgsText == "*".
+	 */
+	char *signatureArgsText;     /* malloc'ed area */
+	char **signatureArgs;        /* malloc'ed array of malloc'ed strings */
+	int signatureArgsCount;
+
+	/*
+	 * Set when objectType (above) is OPERATOR: the left and right operand
+	 * type, or absent (hasLeftArg/hasRightArg false, as pg_dump itself
+	 * writes "NONE" for that side) for a prefix or postfix operator that
+	 * doesn't have it.
+	 */
+	bool operatorHasLeftArg;
+	char *operatorLeftArg;       /* malloc'ed area */
+	bool operatorHasRightArg;
+	char *operatorRightArg;      /* malloc'ed area */
 } ArchiveContentItem;
 
 

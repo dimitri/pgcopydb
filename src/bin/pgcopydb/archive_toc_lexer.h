@@ -27,7 +27,15 @@ typedef enum
 	ARCHIVE_TOC_TOKEN_DOT,
 	ARCHIVE_TOC_TOKEN_ON,
 	ARCHIVE_TOC_TOKEN_DOMAIN,
-	ARCHIVE_TOC_TOKEN_IDENT
+	ARCHIVE_TOC_TOKEN_IDENT,
+
+	/*
+	 * OBJTYPEARGS only: the whole text between a FUNCTION/PROCEDURE/
+	 * AGGREGATE/OPERATOR's own balanced parentheses, matched as one
+	 * token by counting nested parens (e.g. a type's own typmod,
+	 * "numeric(10,2)") rather than stopping at the first ")".
+	 */
+	ARCHIVE_TOC_TOKEN_ARGS
 } ArchiveTocTokenType;
 
 /* set by the ARCHIVE_TOC_TOKEN_OID rule's action */
@@ -56,6 +64,28 @@ extern char archive_toc_last_desc_text[BUFSIZE];
  * valid only until the next archive_toc_lex() call.
  */
 extern char archive_toc_ident[PG_NAMEDATALEN];
+
+/*
+ * Whether the identifier just returned as ARCHIVE_TOC_TOKEN_IDENT was
+ * double-quoted in the original line (pg_dump's own fmtId() decided it
+ * needed to be) or matched as a plain word. archive_toc_ident itself is
+ * always the unescaped value either way; a caller that needs to
+ * reconstruct the original, faithfully-quoted spelling (see
+ * useListRemainder in pgcmd.h) uses this to decide whether to re-quote
+ * it. Same validity rule as archive_toc_ident: valid only until the next
+ * archive_toc_lex() call.
+ */
+extern bool archive_toc_ident_quoted;
+
+/*
+ * The text just returned as ARCHIVE_TOC_TOKEN_ARGS (OBJTYPEARGS only):
+ * everything between a FUNCTION/PROCEDURE/AGGREGATE/OPERATOR's own
+ * balanced parentheses, exclusive, accumulated across possibly several
+ * OBJTYPEARGS matches the same way archive_toc_ident is. Same validity
+ * rule: valid only until the next archive_toc_lex() call. Sized BUFSIZE,
+ * not PG_NAMEDATALEN: an argument list isn't a single identifier.
+ */
+extern char archive_toc_args[BUFSIZE];
 
 /*
  * archive_toc_lex_line feeds exactly one line (no trailing newline

@@ -40,6 +40,19 @@
  * that can follow is, like everywhere else in this format, never escaped
  * or quoted, so it's still grabbed as one raw REMAINDER token (via
  * archive_toc_begin_remainder) rather than tokenized.
+ *
+ * A second exception within the first: FUNCTION, PROCEDURE, AGGREGATE and
+ * OPERATOR also own an identifier (OBJTYPEBODY, same as above), but it's
+ * immediately followed by its own balanced-parentheses argument list (an
+ * operator's operand types, or a function's own argument list -- see
+ * archive_toc_parser.c's naming note on why we go no further than that
+ * raw text). Recognizing where that group ends genuinely is lexical work
+ * too, exactly the kind flex is built for: a nested pair from a type's own
+ * typmod ("numeric(10,2)") isn't the end of the group, so OBJTYPEBODY's
+ * own "(" rule switches to the OBJTYPEARGS start condition, which counts
+ * paren depth across possibly several matches and returns the whole group
+ * (parentheses excluded) as one ARCHIVE_TOC_TOKEN_ARGS token once depth
+ * returns to zero.
  */
 
 #include <stdlib.h>
@@ -55,6 +68,12 @@ static int archive_toc_tag_token(ArchiveItemDesc desc);
 static int archive_toc_object_type_word_token(void);
 static bool archive_toc_object_type_has_ident(ArchiveItemDesc desc);
 static void archive_toc_ident_append(const char *s, int len);
+static void archive_toc_args_append(const char *s, int len);
+
+/* used directly in the OBJTYPEBODY/OBJTYPEARGS rule actions below, so,
+ * unlike archive_toc_object_type_mode, it must be declared up here in
+ * the prologue rather than down in the trailing user-code section */
+static int archive_toc_args_depth = 0;
 
 %}
 
@@ -67,6 +86,7 @@ static void archive_toc_ident_append(const char *s, int len);
 %x REMAINDER
 %x OBJTYPEBODY
 %x OBJTYPEQIDENT
+%x OBJTYPEARGS
 
 %%
 
@@ -157,9 +177,14 @@ static void archive_toc_ident_append(const char *s, int len);
 "."                                { return ARCHIVE_TOC_TOKEN_DOT; }
 
 \"                                 { BEGIN(OBJTYPEQIDENT);
-                                     archive_toc_ident[0] = '\0'; }
+                                     archive_toc_ident[0] = '\0';
+                                     archive_toc_ident_quoted = true; }
 
-[^\" .]+                           { return archive_toc_object_type_word_token(); }
+"("                                { BEGIN(OBJTYPEARGS);
+                                     archive_toc_args_depth = 1;
+                                     archive_toc_args[0] = '\0'; }
+
+[^\" .(]+                          { return archive_toc_object_type_word_token(); }
 
 }
 
@@ -169,6 +194,23 @@ static void archive_toc_ident_append(const char *s, int len);
 \"                                 { BEGIN(OBJTYPEBODY);
                                      return ARCHIVE_TOC_TOKEN_IDENT; }
 [^\"]+                             { archive_toc_ident_append(yytext, yyleng); }
+
+}
+
+<OBJTYPEARGS>{
+
+"("                                { archive_toc_args_depth++;
+                                     archive_toc_args_append(yytext, yyleng); }
+
+")"                                { archive_toc_args_depth--;
+                                     if (archive_toc_args_depth == 0)
+                                     {
+                                         BEGIN(OBJTYPEBODY);
+                                         return ARCHIVE_TOC_TOKEN_ARGS;
+                                     }
+                                     archive_toc_args_append(yytext, yyleng); }
+
+[^()]+                             { archive_toc_args_append(yytext, yyleng); }
 
 }
 
@@ -192,6 +234,8 @@ ArchiveItemDesc archive_toc_last_desc;
 uint64_t archive_toc_last_oid;
 char archive_toc_last_desc_text[BUFSIZE];
 char archive_toc_ident[PG_NAMEDATALEN];
+bool archive_toc_ident_quoted;
+char archive_toc_args[BUFSIZE];
 
 static bool archive_toc_object_type_mode = false;
 
@@ -211,6 +255,10 @@ archive_toc_object_type_has_ident(ArchiveItemDesc desc)
 		case ARCHIVE_TAG_TRIGGER:
 		case ARCHIVE_TAG_POLICY:
 		case ARCHIVE_TAG_RULE:
+		case ARCHIVE_TAG_FUNCTION:
+		case ARCHIVE_TAG_PROCEDURE:
+		case ARCHIVE_TAG_AGGREGATE:
+		case ARCHIVE_TAG_OPERATOR:
 		{
 			return true;
 		}
@@ -267,6 +315,7 @@ archive_toc_object_type_word_token(void)
 	}
 
 	strlcpy(archive_toc_ident, yytext, sizeof(archive_toc_ident));
+	archive_toc_ident_quoted = false;
 
 	return ARCHIVE_TOC_TOKEN_IDENT;
 }
@@ -293,6 +342,33 @@ archive_toc_ident_append(const char *s, int len)
 	{
 		memcpy(archive_toc_ident + curLen, s, len);
 		archive_toc_ident[curLen + len] = '\0';
+	}
+}
+
+
+/*
+ * archive_toc_args_append appends to archive_toc_args, the accumulator for
+ * a FUNCTION/PROCEDURE/AGGREGATE/OPERATOR's own balanced-parentheses
+ * argument list being scanned across possibly several OBJTYPEARGS matches
+ * -- mirrors archive_toc_ident_append's role for a quoted identifier, one
+ * level up (bytes making up the args text as a whole, not a single quoted
+ * token within it; OBJTYPEARGS does not itself unescape quoting inside an
+ * argument's own type name, if any -- see the file header).
+ */
+static void
+archive_toc_args_append(const char *s, int len)
+{
+	size_t curLen = strlen(archive_toc_args);
+
+	if (curLen + len >= sizeof(archive_toc_args))
+	{
+		len = sizeof(archive_toc_args) - curLen - 1;
+	}
+
+	if (len > 0)
+	{
+		memcpy(archive_toc_args + curLen, s, len);
+		archive_toc_args[curLen + len] = '\0';
 	}
 }
 

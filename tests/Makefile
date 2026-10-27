@@ -12,7 +12,16 @@ all: pagila pagila-multi-steps blobs unit filtering extensions \
 	 cdc-endpos-in-multi-wal-txn cdc-file-rotation \
 	 cdc-pgoutput cdc-filtering-pgoutput \
 	 follow-wal2json follow-9.6 follow-data-only \
-	 follow-pgoutput follow-filtering;
+	 follow-pgoutput follow-filtering \
+	 toc-coverage;
+
+# Unlike every other test target, this needs no docker image and no
+# live Postgres connection: it runs the already-built pgcopydb binary
+# against the saved tests/toc-coverage/expected-pg-restore-list.txt
+# fixture (see fixture.sql for how that was captured).
+toc-coverage:
+	$(MAKE) -C .. bin
+	bash toc-coverage/check.sh
 
 pagila: build
 	$(MAKE) -C $@
@@ -137,6 +146,7 @@ clean-images:
 
 .PHONY: all build build-pagila build-multi force-build clean-images
 .PHONY: pagila pagila-multi-steps blobs unit filtering partitioned-target extensions
+.PHONY: toc-coverage
 .PHONY: all-databases three-databases
 .PHONY: cdc-wal2json cdc-test-decoding cdc-endpos-mid-txn cdc-low-level cdc-replica-identity-index cdc-partitioned-target
 .PHONY: cdc-endpos-in-multi-wal-txn cdc-file-rotation

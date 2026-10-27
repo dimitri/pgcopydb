@@ -90,6 +90,39 @@ create aggregate fixture_concat(text) (
 );
 comment on aggregate fixture_concat(text) is 'fixture aggregate comment';
 
+-- a zero-argument aggregate: format_function_arguments' own is_agg
+-- special case prints "(*)" literally instead of calling
+-- pg_get_function_arguments (see pg_dump.c) -- archive_toc_parser.c's
+-- splitFunctionArgs needs to recognize that as zero real arguments, not
+-- as one literal "*" argument
+create aggregate fixture_count_fn (*) (
+    sfunc = int4inc,
+    stype = int,
+    initcond = '0'
+);
+comment on aggregate fixture_count_fn (*) is 'fixture zero-arg aggregate comment';
+
+-- a function with an array-typed argument, and more than one argument to
+-- split on. Nested parens around a single argument (a type's own
+-- typmod, e.g. numeric(10,2), or a default value's own parenthesized
+-- expression) are deliberately NOT exercised here: pg_dump's COMMENT/ACL
+-- dumping uses pg_get_function_identity_arguments(), which keeps argmode
+-- and argname but drops default values outright, and typmod was never
+-- part of a function's own argument types to begin with -- there is no
+-- real pg_dump output where a paren ends up nested inside one of these
+-- signatures. archive_toc_parser.c's splitFunctionArgs still handles
+-- that case defensively (see its own synthetic-input test coverage),
+-- it's just not reachable from an actual captured fixture.
+create function fixture_scale(b int[], a int) returns int
+language sql as $$ select a * coalesce(array_length(b, 1), 1) $$;
+comment on function fixture_scale(int[], int) is 'fixture typed-args function comment';
+
+-- a function name that needs fmtId() double-quoting: mixed case and an
+-- embedded space
+create function "Fixture Weird Fn"(a int) returns int
+language sql as $$ select a $$;
+comment on function "Fixture Weird Fn"(int) is 'fixture quoted function name comment';
+
 --
 -- OPERATOR, OPERATOR_CLASS, OPERATOR_FAMILY
 --
@@ -102,6 +135,18 @@ create operator === (
     procedure = fixture_eq_fn
 );
 comment on operator === (int, int) is 'fixture operator comment';
+
+-- a prefix (left-unary) operator: pg_dump writes "NONE" for the leftarg
+-- it doesn't have (postfix/right-unary operators were removed in PG 14,
+-- so there is no equivalent "NONE" on the right to cover here)
+create function fixture_neg_fn(a int) returns int
+language sql as $$ select -a $$;
+
+create operator @-@ (
+    rightarg = int,
+    procedure = fixture_neg_fn
+);
+comment on operator @-@ (NONE, int) is 'fixture prefix operator comment';
 
 create operator family fixture_int_ops using btree;
 comment on operator family fixture_int_ops using btree is 'fixture operator family comment';

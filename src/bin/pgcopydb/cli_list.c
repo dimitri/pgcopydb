@@ -2423,17 +2423,32 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 
 	/*
 	 * "functions with parameters of this type": item->name holds the whole
-	 * signature text verbatim for FUNCTION/PROCEDURE/AGGREGATE/OPERATOR/
-	 * CAST (see archive_toc_parser.c's ARCHIVE_SHAPE_SIMPLE/OPAQUE), so a
-	 * substring match against it is a pragmatic way to catch "this type
-	 * appears somewhere in this signature" without actually parsing
-	 * argument lists -- pg_dump's own TOC format doesn't split out
-	 * individual argument types either.
+	 * signature text verbatim for a top-level (non-ACL/COMMENT) FUNCTION/
+	 * PROCEDURE/AGGREGATE/OPERATOR/CAST entry (see archive_toc_parser.c's
+	 * ARCHIVE_SHAPE_SIMPLE/OPAQUE); for an ACL/COMMENT entry on one of
+	 * those, the signature is split out instead -- item->signatureArgsText
+	 * (FUNCTION/PROCEDURE/AGGREGATE) or item->operatorLeftArg/RightArg
+	 * (OPERATOR) -- so check whichever of those applies too. Matching is
+	 * still a plain substring search, not a parse of the argument list:
+	 * pg_dump's own TOC format doesn't split out individual argument
+	 * types either, and going that far isn't worth it (see this PR's own
+	 * description for why).
 	 */
 	if (!skip && !IS_EMPTY_STRING_BUFFER(listDBoptions.tocTypePattern))
 	{
-		if (IS_EMPTY_STRING_BUFFER(item->name) ||
-			strstr(item->name, listDBoptions.tocTypePattern) == NULL)
+		const char *pattern = listDBoptions.tocTypePattern;
+
+		bool found =
+			(!IS_EMPTY_STRING_BUFFER(item->name) &&
+			 strstr(item->name, pattern) != NULL) ||
+			(item->signatureArgsText != NULL &&
+			 strstr(item->signatureArgsText, pattern) != NULL) ||
+			(item->operatorHasLeftArg &&
+			 strstr(item->operatorLeftArg, pattern) != NULL) ||
+			(item->operatorHasRightArg &&
+			 strstr(item->operatorRightArg, pattern) != NULL);
+
+		if (!found)
 		{
 			skip = true;
 		}
@@ -2466,6 +2481,42 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 			json_object_set_string(jsobj, "relation", item->relname);
 			json_object_set_string(jsobj, "name", item->name);
 			json_object_set_string(jsobj, "owner", item->owner);
+
+			/*
+			 * FUNCTION/PROCEDURE/AGGREGATE (ACL/COMMENT only, see
+			 * archive_toc_parser.c's finishFunctionLikeAclOrComment):
+			 * the raw argument-list text, and that same text split on
+			 * its own top-level commas.
+			 */
+			if (item->signatureArgsText != NULL)
+			{
+				json_object_set_string(jsobj, "args", item->signatureArgsText);
+
+				JSON_Value *jsArgs = json_value_init_array();
+				JSON_Array *jsArgsArray = json_value_get_array(jsArgs);
+
+				for (int i = 0; i < item->signatureArgsCount; i++)
+				{
+					json_array_append_string(jsArgsArray, item->signatureArgs[i]);
+				}
+
+				json_object_set_value(jsobj, "argsList", jsArgs);
+			}
+
+			/*
+			 * OPERATOR (ACL/COMMENT only, see finishOperatorAclOrComment):
+			 * the left/right operand type, empty when that side is NONE
+			 * (a prefix or postfix operator missing it).
+			 */
+			if (item->operatorHasLeftArg || item->operatorHasRightArg)
+			{
+				json_object_set_string(jsobj, "leftArg",
+									   item->operatorHasLeftArg
+									   ? item->operatorLeftArg : "");
+				json_object_set_string(jsobj, "rightArg",
+									   item->operatorHasRightArg
+									   ? item->operatorRightArg : "");
+			}
 
 			char *serialized = json_serialize_to_string(js);
 

@@ -28,3 +28,9 @@ src/bin/lib/uthash/** -citus-style
 src/bin/lib/jenkins/** -citus-style
 src/bin/lib/sqlite/* -citus-style
 src/bin/pgcopydb/pg_utils.c -citus-style
+
+# flex-generated, not hand-written, not tracked in git (see .gitignore
+# and src/bin/pgcopydb/Makefile) -- exempt from both the style and the
+# banned-API check (ci/banned.h.sh keys off this same attribute), the
+# same way a vendored lib/ directory above is
+src/bin/pgcopydb/archive_toc_lexer.c -citus-style

@@ -329,6 +329,75 @@ splitAclOrCommentOpaqueNameAndOwner(const char *remainder,
 
 
 /*
+ * quoteIdentForUseList re-applies pg_dump's own fmtId() double-quoting
+ * (doubling any embedded quote) to an identifier the lexer's
+ * OBJTYPEQIDENT state already unescaped into its true, plain value --
+ * wasQuoted (see archive_toc_ident_quoted) says whether the original
+ * actually needed it. item->name/relname/... always hold the plain,
+ * unescaped value (that's the whole point of tokenizing it instead of
+ * treating it as raw text); this is only for reconstructing
+ * useListRemainder, which must round-trip the ORIGINAL spelling
+ * byte-identically, quotes included.
+ *
+ * Returns NULL (logging ALLOCATION_FAILED_ERROR) on OOM, same convention
+ * as every other allocation in this file.
+ */
+static char *
+quoteIdentForUseList(const char *ident, bool wasQuoted)
+{
+	if (!wasQuoted)
+	{
+		char *copy = strdup(ident);
+
+		if (copy == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+		}
+
+		return copy;
+	}
+
+	size_t len = strlen(ident);
+	size_t embeddedQuotes = 0;
+
+	for (size_t i = 0; i < len; i++)
+	{
+		if (ident[i] == '"')
+		{
+			embeddedQuotes++;
+		}
+	}
+
+	size_t bytes = len + embeddedQuotes + 2 + 1;
+	char *quoted = (char *) calloc(bytes, sizeof(char));
+
+	if (quoted == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return NULL;
+	}
+
+	char *p = quoted;
+	*p++ = '"';
+
+	for (size_t i = 0; i < len; i++)
+	{
+		if (ident[i] == '"')
+		{
+			*p++ = '"';
+		}
+
+		*p++ = ident[i];
+	}
+
+	*p++ = '"';
+	*p = '\0';
+
+	return quoted;
+}
+
+
+/*
  * finishRelationAclOrComment finishes parsing an ACL/COMMENT entry that
  * belongs to a relation, once the object type's own identifier(s) have
  * already been pulled as ARCHIVE_TOC_TOKEN_IDENT tokens: it pulls the one
@@ -347,10 +416,17 @@ splitAclOrCommentOpaqueNameAndOwner(const char *remainder,
  * constraint, trigger, policy or rule name, or a column name) -- kept in
  * item->name for callers that want it, even though it plays no part in
  * restoreListName.
+ *
+ * relnameQuoted/nameQuoted say whether relname/name were themselves
+ * double-quoted in the original line (see archive_toc_ident_quoted),
+ * needed to reconstruct useListRemainder's ORIGINAL spelling faithfully
+ * -- restoreListName and item->relname/name themselves stay unescaped
+ * either way.
  */
 static bool
 finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
-						   const char *relname, const char *name)
+						   const char *relname, const char *name,
+						   bool relnameQuoted, bool nameQuoted)
 {
 	char owner[PG_NAMEDATALEN] = { 0 };
 
@@ -397,20 +473,36 @@ finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
 	 *   name empty:                   "relname"        (TABLE, VIEW, ...)
 	 *   objectType is COLUMN:         "relname.name"
 	 *   objectType is CONSTRAINT/etc: "name ON relname"
+	 *
+	 * relname/name are re-quoted here (quoteIdentForUseList), not left as
+	 * the plain, unescaped values item->relname/name themselves hold, so
+	 * a quoted original (e.g. "Weird Table") round-trips byte-identically
+	 * instead of losing its quotes.
 	 */
-	char body[2 * PG_NAMEDATALEN + 8] = { 0 };
+	char *qRelname = quoteIdentForUseList(relname, relnameQuoted);
+	char *qName = IS_EMPTY_STRING_BUFFER(name)
+				  ? strdup("")
+				  : quoteIdentForUseList(name, nameQuoted);
+
+	if (qRelname == NULL || qName == NULL)
+	{
+		/* errors, if any, have already been logged */
+		return false;
+	}
+
+	char body[2 * (2 * PG_NAMEDATALEN) + 8] = { 0 };
 
 	if (IS_EMPTY_STRING_BUFFER(name))
 	{
-		strlcpy(body, relname, sizeof(body));
+		strlcpy(body, qRelname, sizeof(body));
 	}
 	else if (item->objectType == ARCHIVE_TAG_COLUMN)
 	{
-		sformat(body, sizeof(body), "%s.%s", relname, name);
+		sformat(body, sizeof(body), "%s.%s", qRelname, qName);
 	}
 	else
 	{
-		sformat(body, sizeof(body), "%s ON %s", name, relname);
+		sformat(body, sizeof(body), "%s ON %s", qName, qRelname);
 	}
 
 	size_t ulrBytes =
@@ -427,6 +519,364 @@ finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
 
 	sformat(item->useListRemainder, ulrBytes, "%s %s %s %s",
 			nspname, item->objectTypeText, body, owner);
+
+	return true;
+}
+
+
+/*
+ * splitFunctionArgs splits a FUNCTION/PROCEDURE/AGGREGATE's raw,
+ * comma-separated argument-list text -- already extracted from between
+ * its own balanced parentheses by the lexer's OBJTYPEARGS state, see
+ * archive_toc_lexer.l -- into one string per argument, on TOP-LEVEL
+ * commas only: a nested paren pair isn't a boundary. In practice, real
+ * pg_dump output never puts one of those inside an ACL/COMMENT's own
+ * argument list here -- pg_get_function_identity_arguments() (what
+ * dumpComment/dumpACL actually use, see pg_dump.c) keeps argmode and
+ * argname but drops default values outright, and a type's own typmod
+ * (e.g. "numeric(10,2)") was never part of a function's argument types
+ * to begin with -- but this still handles it defensively (verified with
+ * a synthetic, hand-built line, not a captured fixture -- see
+ * tests/toc-coverage/fixture.sql's own note on why) rather than assume
+ * it can never happen.
+ *
+ * Each argument is kept exactly as pg_get_function_identity_arguments()
+ * printed it, "[argmode] [argname] argtype" -- see this file's own
+ * naming note: argtype is a full Postgres type-name expression, not a
+ * lexable token, so we go no further than this.
+ *
+ * A zero-argument aggregate's literal "(*)" (format_function_arguments'
+ * own special case for is_agg, not a real argument -- see pg_dump.c) is
+ * recognized as zero arguments, not as one literal "*" argument.
+ *
+ * Not fatal on OOM: returns false, leaving item->signatureArgs/Count at
+ * their zero value, the same "not supported, caller still has the full
+ * text" convention every other split function in this file follows.
+ */
+static bool
+splitFunctionArgs(const char *argsText, ArchiveContentItem *item)
+{
+	item->signatureArgs = NULL;
+	item->signatureArgsCount = 0;
+
+	if (IS_EMPTY_STRING_BUFFER(argsText) || streq(argsText, "*"))
+	{
+		return true;
+	}
+
+	int depth = 0;
+	int count = 1;
+
+	for (const char *p = argsText; *p != '\0'; p++)
+	{
+		if (*p == '(')
+		{
+			depth++;
+		}
+		else if (*p == ')')
+		{
+			depth--;
+		}
+		else if (*p == ',' && depth == 0)
+		{
+			count++;
+		}
+	}
+
+	char **args = (char **) calloc(count, sizeof(char *));
+
+	if (args == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	int argIndex = 0;
+	const char *start = argsText;
+
+	depth = 0;
+
+	for (const char *p = argsText;; p++)
+	{
+		bool atBoundary = (*p == ',' && depth == 0) || *p == '\0';
+
+		if (*p == '(')
+		{
+			depth++;
+		}
+		else if (*p == ')')
+		{
+			depth--;
+		}
+
+		if (atBoundary)
+		{
+			/* pg_dump always separates arguments with ", " */
+			if (*start == ' ')
+			{
+				start++;
+			}
+
+			size_t len = p - start;
+
+			char *arg = (char *) calloc(len + 1, sizeof(char));
+
+			if (arg == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			memcpy(arg, start, len); /* IGNORE-BANNED */
+			arg[len] = '\0';
+
+			args[argIndex++] = arg;
+			start = p + 1;
+		}
+
+		if (*p == '\0')
+		{
+			break;
+		}
+	}
+
+	item->signatureArgs = args;
+	item->signatureArgsCount = argIndex;
+
+	return true;
+}
+
+
+/*
+ * finishFunctionLikeAclOrComment finishes parsing an ACL/COMMENT entry on
+ * a FUNCTION, PROCEDURE or AGGREGATE, once its own name and the raw text
+ * of its balanced-parentheses argument list have already been pulled by
+ * the caller (parseAclOrCommentRemainder). Unlike finishRelationAclOrComment,
+ * there is no separate owning relation here: the function/procedure/
+ * aggregate is itself the object the ACL/COMMENT is attached to, so
+ * restoreListName is built the same way ("nspname name owner"), just with
+ * the bare function name standing in for a relation's.
+ *
+ * This is inert for filtering today: no filters catalog query populates
+ * restore_list_name rows for these object types (only
+ * list_collations.sql/list_source_sequences.sql do), same as the old
+ * full-remainder fallback this replaces.
+ *
+ * funcnameQuoted says whether funcname was itself double-quoted in the
+ * original line (see archive_toc_ident_quoted), needed to reconstruct
+ * useListRemainder's original spelling faithfully -- item->name and
+ * restoreListName stay unescaped either way. argsText needs no such
+ * handling: OBJTYPEARGS never unescapes anything inside it in the first
+ * place (see the lexer file header), so whatever quoting it already had
+ * -- inside an argument's own name or type, say -- simply passed through
+ * untouched.
+ */
+static bool
+finishFunctionLikeAclOrComment(ArchiveContentItem *item, const char *nspname,
+							   const char *funcname, const char *argsText,
+							   bool funcnameQuoted)
+{
+	char owner[PG_NAMEDATALEN] = { 0 };
+
+	int next = archive_toc_lex();
+
+	if (next == ARCHIVE_TOC_TOKEN_SPACE)
+	{
+		archive_toc_begin_remainder();
+
+		if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
+		{
+			return false;
+		}
+
+		strlcpy(owner, archive_toc_text, sizeof(owner));
+	}
+	else if (next != ARCHIVE_TOC_TOKEN_EOF)
+	{
+		return false;
+	}
+
+	strlcpy(item->name, funcname, sizeof(item->name));
+	strlcpy(item->owner, owner, sizeof(item->owner));
+	item->tagType = ARCHIVE_TAG_TYPE_OTHER;
+
+	item->signatureArgsText = strdup(argsText);
+
+	if (item->signatureArgsText == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	if (!splitFunctionArgs(argsText, item))
+	{
+		/* not fatal: signatureArgsText above is still valid on its own */
+		log_debug("archive_toc_parser: could not split function args \"%s\"",
+				  argsText);
+	}
+
+	size_t bytes = strlen(nspname) + 1 + strlen(funcname) + 1 + strlen(owner) + 1;
+
+	item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+	if (item->restoreListName == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	sformat(item->restoreListName, bytes, "%s %s %s", nspname, funcname, owner);
+
+	/* useListRemainder reproduces the full original line, as ever --
+	 * funcname re-quoted if it originally was (see this function's own
+	 * comment) */
+	char *qFuncname = quoteIdentForUseList(funcname, funcnameQuoted);
+
+	if (qFuncname == NULL)
+	{
+		/* errors, if any, have already been logged */
+		return false;
+	}
+
+	size_t ulrBytes = strlen(nspname) + 1 + strlen(item->objectTypeText) + 1 +
+					  strlen(qFuncname) + 1 + strlen(argsText) + 2 +
+					  strlen(owner) + 1;
+
+	item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
+
+	if (item->useListRemainder == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	sformat(item->useListRemainder, ulrBytes, "%s %s %s(%s) %s",
+			nspname, item->objectTypeText, qFuncname, argsText, owner);
+
+	return true;
+}
+
+
+/*
+ * finishOperatorAclOrComment finishes parsing an ACL/COMMENT entry on an
+ * OPERATOR, once its own symbol and the raw text of its balanced-
+ * parentheses operand-type pair have already been pulled by the caller.
+ *
+ * The operand-type pair is "leftarg-or-NONE, rightarg-or-NONE" (pg_dump's
+ * own dumpOpr, pg_dump.c: NONE literally, for a prefix or postfix
+ * operator missing that side) -- split on its one top-level comma into
+ * operatorLeftArg/operatorRightArg, with operatorHasLeftArg/RightArg
+ * false (and the arg field left empty) when that side is NONE.
+ */
+static bool
+finishOperatorAclOrComment(ArchiveContentItem *item, const char *nspname,
+						   const char *symbol, const char *argsText)
+{
+	char owner[PG_NAMEDATALEN] = { 0 };
+
+	int next = archive_toc_lex();
+
+	if (next == ARCHIVE_TOC_TOKEN_SPACE)
+	{
+		archive_toc_begin_remainder();
+
+		if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
+		{
+			return false;
+		}
+
+		strlcpy(owner, archive_toc_text, sizeof(owner));
+	}
+	else if (next != ARCHIVE_TOC_TOKEN_EOF)
+	{
+		return false;
+	}
+
+	const char *comma = strchr(argsText, ',');
+
+	if (comma == NULL)
+	{
+		log_debug("archive_toc_parser: no operand boundary in \"%s\"", argsText);
+		return false;
+	}
+
+	char leftArg[PG_NAMEDATALEN] = { 0 };
+	char rightArg[PG_NAMEDATALEN] = { 0 };
+
+	size_t leftLen = comma - argsText;
+
+	if (leftLen >= sizeof(leftArg))
+	{
+		return false;
+	}
+
+	strlcpy(leftArg, argsText, leftLen + 1);
+
+	const char *rightStart = comma + 1;
+
+	if (*rightStart == ' ')
+	{
+		rightStart++;
+	}
+
+	strlcpy(rightArg, rightStart, sizeof(rightArg));
+
+	item->operatorHasLeftArg = !streq(leftArg, "NONE");
+	item->operatorHasRightArg = !streq(rightArg, "NONE");
+
+	if (item->operatorHasLeftArg)
+	{
+		item->operatorLeftArg = strdup(leftArg);
+
+		if (item->operatorLeftArg == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+	}
+
+	if (item->operatorHasRightArg)
+	{
+		item->operatorRightArg = strdup(rightArg);
+
+		if (item->operatorRightArg == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+	}
+
+	strlcpy(item->name, symbol, sizeof(item->name));
+	strlcpy(item->owner, owner, sizeof(item->owner));
+	item->tagType = ARCHIVE_TAG_TYPE_OTHER;
+
+	size_t bytes = strlen(nspname) + 1 + strlen(symbol) + 1 + strlen(owner) + 1;
+
+	item->restoreListName = (char *) calloc(bytes, sizeof(char));
+
+	if (item->restoreListName == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	sformat(item->restoreListName, bytes, "%s %s %s", nspname, symbol, owner);
+
+	/* useListRemainder reproduces the full original line, as ever */
+	size_t ulrBytes = strlen(nspname) + 1 + strlen(item->objectTypeText) + 1 +
+					  strlen(symbol) + 2 + strlen(argsText) + 2 +
+					  strlen(owner) + 1;
+
+	item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
+
+	if (item->useListRemainder == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	sformat(item->useListRemainder, ulrBytes, "%s %s %s (%s) %s",
+			nspname, item->objectTypeText, symbol, argsText, owner);
 
 	return true;
 }
@@ -658,7 +1108,10 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 			strlcpy(relname, archive_toc_ident, sizeof(relname));
 
-			return finishRelationAclOrComment(item, nspname, relname, "");
+			bool relnameQuoted = archive_toc_ident_quoted;
+
+			return finishRelationAclOrComment(item, nspname, relname, "",
+											  relnameQuoted, false);
 		}
 
 		case ARCHIVE_TAG_COLUMN:
@@ -685,6 +1138,8 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 			strlcpy(relname, archive_toc_ident, sizeof(relname));
 
+			bool relnameQuoted = archive_toc_ident_quoted;
+
 			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_DOT ||
 				archive_toc_lex() != ARCHIVE_TOC_TOKEN_IDENT)
 			{
@@ -693,7 +1148,9 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 			strlcpy(colname, archive_toc_ident, sizeof(colname));
 
-			return finishRelationAclOrComment(item, nspname, relname, colname);
+			return finishRelationAclOrComment(item, nspname, relname, colname,
+											  relnameQuoted,
+											  archive_toc_ident_quoted);
 		}
 
 		case ARCHIVE_TAG_CONSTRAINT:
@@ -717,6 +1174,8 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 			strlcpy(name, archive_toc_ident, sizeof(name));
 
+			bool nameQuoted = archive_toc_ident_quoted;
+
 			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE ||
 				archive_toc_lex() != ARCHIVE_TOC_TOKEN_ON ||
 				archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE)
@@ -739,18 +1198,89 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 			strlcpy(relname, archive_toc_ident, sizeof(relname));
 
-			return finishRelationAclOrComment(item, nspname, relname, name);
+			return finishRelationAclOrComment(item, nspname, relname, name,
+											  archive_toc_ident_quoted,
+											  nameQuoted);
+		}
+
+		case ARCHIVE_TAG_FUNCTION:
+		case ARCHIVE_TAG_PROCEDURE:
+		case ARCHIVE_TAG_AGGREGATE:
+		{
+			if (!hasNamespace)
+			{
+				return false;
+			}
+
+			char funcname[PG_NAMEDATALEN] = { 0 };
+
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE ||
+				archive_toc_lex() != ARCHIVE_TOC_TOKEN_IDENT)
+			{
+				return false;
+			}
+
+			strlcpy(funcname, archive_toc_ident, sizeof(funcname));
+
+			bool funcnameQuoted = archive_toc_ident_quoted;
+
+			/* no space between the name and its own argument list */
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_ARGS)
+			{
+				return false;
+			}
+
+			char argsText[BUFSIZE] = { 0 };
+			strlcpy(argsText, archive_toc_args, sizeof(argsText));
+
+			return finishFunctionLikeAclOrComment(item, nspname, funcname,
+												  argsText, funcnameQuoted);
+		}
+
+		case ARCHIVE_TAG_OPERATOR:
+		{
+			if (!hasNamespace)
+			{
+				return false;
+			}
+
+			char symbol[PG_NAMEDATALEN] = { 0 };
+
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE ||
+				archive_toc_lex() != ARCHIVE_TOC_TOKEN_IDENT)
+			{
+				return false;
+			}
+
+			strlcpy(symbol, archive_toc_ident, sizeof(symbol));
+
+			/* "op (leftarg-or-NONE, rightarg-or-NONE)", see pg_dump.c's
+			 * dumpOpr: there IS a space before the parenthesized pair,
+			 * unlike a function's own immediately-attached argument list */
+			if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_SPACE ||
+				archive_toc_lex() != ARCHIVE_TOC_TOKEN_ARGS)
+			{
+				return false;
+			}
+
+			char argsText[BUFSIZE] = { 0 };
+			strlcpy(argsText, archive_toc_args, sizeof(argsText));
+
+			return finishOperatorAclOrComment(item, nspname, symbol, argsText);
 		}
 
 		default:
 		{
 			/*
-			 * FUNCTION, PROCEDURE, AGGREGATE, OPERATOR, TYPE, DOMAIN, ...:
-			 * handle every object type whose own top-level (non-ACL) shape
-			 * is ARCHIVE_SHAPE_SIMPLE the same way splitSimpleOrRelationRemainder
-			 * does for a top-level entry of the same tag -- their own
-			 * signature can contain embedded spaces, but the owner is
-			 * still reliably the last space-delimited token. Genuinely
+			 * TYPE, DOMAIN, LANGUAGE, ACCESS METHOD, ...: handle every
+			 * remaining object type whose own top-level (non-ACL) shape is
+			 * ARCHIVE_SHAPE_SIMPLE the same way splitSimpleOrRelationRemainder
+			 * does for a top-level entry of the same tag -- their own name
+			 * can contain embedded spaces, but the owner is still reliably
+			 * the last space-delimited token. FUNCTION/PROCEDURE/AGGREGATE
+			 * and OPERATOR have their own dedicated cases above instead,
+			 * since their own argument list genuinely has lexable structure
+			 * (a balanced-parentheses group), unlike these. Genuinely
 			 * irregular ARCHIVE_SHAPE_OPAQUE/RELATION tags (CAST,
 			 * USER_MAPPING, DEFAULT_ACL, ...) don't meaningfully occur
 			 * inside an ACL/COMMENT and are left unsplit, falling back to
