@@ -3,19 +3,19 @@
  *     Parses one pg_restore --list line into an ArchiveContentItem, using
  *     the flex-generated archive_toc_lexer.l for every TAG the format can
  *     contain -- both the outer dumpId/catalogOid/objectOid/TAG prefix and,
- *     for an ACL or COMMENT entry, the TAG2 nested inside its remainder --
- *     and a small shape table (below) for the irregular, tag-dependent
- *     rest of the line.
+ *     for an ACL or COMMENT entry, the object type nested inside its
+ *     remainder -- and a small shape table (below) for the irregular,
+ *     tag-dependent rest of the line.
  *
  * This supersedes the old hand-rolled parser entirely (tokenize_archive_
  * list_entry, parse_archive_list_entry, parse_archive_acl_or_comment and
  * parse_archive_acl_or_comment_relation, formerly in pgcmd.c, now removed):
  * ACL/COMMENT composite-tag parsing is where the old declaration-order-
- * sensitive TAG matching mattered the most, since TAG2 is matched against
- * the exact same keyword set as the outer TAG, with the exact same
- * prefix-ambiguity hazards -- so it is also where replacing that matching
- * with a generated DFA pays off the most, not a part of the format worth
- * leaving on the old parser.
+ * sensitive TAG matching mattered the most, since the object type is
+ * matched against the exact same keyword set as the outer TAG, with the
+ * exact same prefix-ambiguity hazards -- so it is also where replacing
+ * that matching with a generated DFA pays off the most, not a part of the
+ * format worth leaving on the old parser.
  */
 
 #include <string.h>
@@ -32,9 +32,9 @@
  * (not ACL/COMMENT-wrapped) desc of a pg_restore --list line. ACL and
  * COMMENT themselves are not listed: they are handled before this table
  * is ever consulted (see archive_toc_parse_line). Tags that can only
- * appear as TAG2 inside an ACL/COMMENT entry (e.g. ARCHIVE_TAG_COLUMN)
- * are also not listed, for the same reason -- parseAclOrCommentRemainder
- * (below) owns that shape already.
+ * appear as the object type inside an ACL/COMMENT entry (e.g.
+ * ARCHIVE_TAG_COLUMN) are also not listed, for the same reason --
+ * parseAclOrCommentRemainder (below) owns that shape already.
  *
  * Verified against a real captured pg_restore --list fixture
  * (tests/toc-coverage/): every row marked (*) below. The rest are
@@ -276,11 +276,11 @@ splitSimpleOrRelationRemainder(const char *remainder, ArchiveContentItem *item)
 
 /*
  * finishRelationAclOrComment finishes parsing an ACL/COMMENT entry that
- * belongs to a relation, once TAG2's own identifier(s) have already been
- * pulled as ARCHIVE_TOC_TOKEN_IDENT tokens: it pulls the one token that's
- * left, either SPACE (an owner follows) or EOF (no owner at all), and
- * builds "nspname relname rolname" as item->restoreListName -- the
- * restore list name of the *relation*, not of the ACL/COMMENT entry
+ * belongs to a relation, once the object type's own identifier(s) have
+ * already been pulled as ARCHIVE_TOC_TOKEN_IDENT tokens: it pulls the one
+ * token that's left, either SPACE (an owner follows) or EOF (no owner at
+ * all), and builds "nspname relname rolname" as item->restoreListName --
+ * the restore list name of the *relation*, not of the ACL/COMMENT entry
  * itself, so that e.g. a COMMENT ON COLUMN is filtered out together with
  * the table it belongs to, matching the only kind of name-based lookup
  * copydb_objectid_is_filtered_out performs for these OID-less entries.
@@ -289,9 +289,10 @@ splitSimpleOrRelationRemainder(const char *remainder, ArchiveContentItem *item)
  * archive_toc_begin_remainder) rather than as an IDENT: unlike relname/
  * colname/name, it is never itself quoted or escaped by pg_dump.
  *
- * name, when not empty, is TAG2's own identifier (a constraint, trigger,
- * policy or rule name, or a column name) -- kept in item->name for callers
- * that want it, even though it plays no part in restoreListName.
+ * name, when not empty, is the object type's own identifier (a
+ * constraint, trigger, policy or rule name, or a column name) -- kept in
+ * item->name for callers that want it, even though it plays no part in
+ * restoreListName.
  */
 static bool
 finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
@@ -335,13 +336,13 @@ finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
 	item->tagType = ARCHIVE_TAG_TYPE_OTHER;
 
 	/*
-	 * useListRemainder reproduces the full original line, TAG2 included,
-	 * unlike restoreListName above (see the field's own comment in
-	 * pgcmd.h): the body differs by TAG2's own shape --
+	 * useListRemainder reproduces the full original line, object type
+	 * included, unlike restoreListName above (see the field's own comment
+	 * in pgcmd.h): the body differs by the object type's own shape --
 	 *
-	 *   name empty:               "relname"            (TABLE, VIEW, ...)
-	 *   TAG2 is COLUMN:           "relname.name"
-	 *   TAG2 is CONSTRAINT/etc.:  "name ON relname"
+	 *   name empty:                   "relname"        (TABLE, VIEW, ...)
+	 *   objectType is COLUMN:         "relname.name"
+	 *   objectType is CONSTRAINT/etc: "name ON relname"
 	 */
 	char body[2 * PG_NAMEDATALEN + 8] = { 0 };
 
@@ -349,7 +350,7 @@ finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
 	{
 		strlcpy(body, relname, sizeof(body));
 	}
-	else if (item->innerDesc == ARCHIVE_TAG_COLUMN)
+	else if (item->objectType == ARCHIVE_TAG_COLUMN)
 	{
 		sformat(body, sizeof(body), "%s.%s", relname, name);
 	}
@@ -359,7 +360,7 @@ finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
 	}
 
 	size_t ulrBytes =
-		strlen(nspname) + 1 + strlen(item->innerDescText) + 1 +
+		strlen(nspname) + 1 + strlen(item->objectTypeText) + 1 +
 		strlen(body) + 1 + strlen(owner) + 1;
 
 	item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
@@ -371,7 +372,7 @@ finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
 	}
 
 	sformat(item->useListRemainder, ulrBytes, "%s %s %s %s",
-			nspname, item->innerDescText, body, owner);
+			nspname, item->objectTypeText, body, owner);
 
 	return true;
 }
@@ -391,23 +392,23 @@ finishRelationAclOrComment(ArchiveContentItem *item, const char *nspname,
  * leading space after the outer ACL/COMMENT tag has already been
  * stripped by the caller). This outer namespace is plain, unquoted text,
  * like every top-level TOC field -- unlike the identifier(s) embedded in
- * TAG2's own remainder (a relation, column, constraint, trigger, policy
- * or rule name), which pg_dump builds with fmtId() and so can be
- * double-quoted; the lexer's TAG2BODY/TAG2QIDENT states handle that
- * unescaping (see archive_toc_lexer.l), this function only consumes the
- * resulting tokens.
+ * the object type's own remainder (a relation, column, constraint,
+ * trigger, policy or rule name), which pg_dump builds with fmtId() and so
+ * can be double-quoted; the lexer's OBJTYPEBODY/OBJTYPEQIDENT states
+ * handle that unescaping (see archive_toc_lexer.l), this function only
+ * consumes the resulting tokens.
  *
- * TAG2 itself is recognized by re-entering the same flex lexer on the
- * substring starting at TAG2's own keyword text: by the time this runs,
- * every token already pulled from the outer line has been copied out
- * (rawRemainder is a heap copy, independent of the lexer's scan buffer),
- * so reusing the lexer here is safe.
+ * The object type itself is recognized by re-entering the same flex
+ * lexer on the substring starting at its own keyword text: by the time
+ * this runs, every token already pulled from the outer line has been
+ * copied out (rawRemainder is a heap copy, independent of the lexer's
+ * scan buffer), so reusing the lexer here is safe.
  *
  * On success, populates item->restoreListName (the filtering-relevant
- * name -- the owning relation's for a relation-scoped TAG2, see
- * finishRelationAclOrComment) and the structured innerDesc/hasNamespace/
- * nspname/relname/name/owner fields. On failure (a TAG2 this function
- * doesn't know how to split, or malformed input), leaves
+ * name -- the owning relation's for a relation-scoped object type, see
+ * finishRelationAclOrComment) and the structured objectType/hasNamespace/
+ * nspname/relname/name/owner fields. On failure (an object type this
+ * function doesn't know how to split, or malformed input), leaves
  * item->restoreListName untouched, so the caller's raw-text fallback (the
  * whole, unsplit remainder) stands -- exactly as "we don't support this
  * one yet" has always been handled here.
@@ -446,23 +447,24 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 	}
 
 	/*
-	 * p now points right at TAG2's own keyword text. archive_toc_lex_tag2_line
-	 * (rather than archive_toc_lex_line) arms TAG2BODY tokenizing for
-	 * whichever TAG2 owns an identifier of its own.
+	 * p now points right at the object type's own keyword text.
+	 * archive_toc_lex_object_type_line (rather than archive_toc_lex_line)
+	 * arms OBJTYPEBODY tokenizing for whichever object type owns an
+	 * identifier of its own.
 	 */
-	archive_toc_lex_tag2_line(p);
+	archive_toc_lex_object_type_line(p);
 
 	if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_DESC)
 	{
 		return false;
 	}
 
-	ArchiveItemDesc tag2 = archive_toc_last_desc;
+	ArchiveItemDesc objectType = archive_toc_last_desc;
 
-	item->innerDesc = tag2;
-	item->innerDescText = strdup(archive_toc_last_desc_text);
+	item->objectType = objectType;
+	item->objectTypeText = strdup(archive_toc_last_desc_text);
 
-	if (item->innerDescText == NULL)
+	if (item->objectTypeText == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
 		return false;
@@ -471,7 +473,7 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 	item->hasNamespace = hasNamespace;
 	strlcpy(item->nspname, nspname, sizeof(item->nspname));
 
-	switch (tag2)
+	switch (objectType)
 	{
 		case ARCHIVE_TAG_SCHEMA:
 		{
@@ -481,14 +483,14 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 				return false;
 			}
 
-			const char *tag2Remainder = archive_toc_text;
+			const char *objTypeRemainder = archive_toc_text;
 
-			if (*tag2Remainder == ' ')
+			if (*objTypeRemainder == ' ')
 			{
-				tag2Remainder++;
+				objTypeRemainder++;
 			}
 
-			size_t bytes = strlen(tag2Remainder) + 3;
+			size_t bytes = strlen(objTypeRemainder) + 3;
 
 			item->restoreListName = (char *) calloc(bytes, sizeof(char));
 
@@ -498,10 +500,10 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 				return false;
 			}
 
-			sformat(item->restoreListName, bytes, "- %s", tag2Remainder);
+			sformat(item->restoreListName, bytes, "- %s", objTypeRemainder);
 			item->tagType = ARCHIVE_TAG_TYPE_SCHEMA;
 
-			size_t ulrBytes = strlen(item->innerDescText) + strlen(tag2Remainder) + 4;
+			size_t ulrBytes = strlen(item->objectTypeText) + strlen(objTypeRemainder) + 4;
 
 			item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
 
@@ -512,7 +514,7 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 			}
 
 			sformat(item->useListRemainder, ulrBytes, "- %s %s",
-					item->innerDescText, tag2Remainder);
+					item->objectTypeText, objTypeRemainder);
 
 			return true;
 		}
@@ -524,11 +526,11 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 				return false;
 			}
 
-			const char *tag2Remainder = archive_toc_text;
+			const char *objTypeRemainder = archive_toc_text;
 
-			if (*tag2Remainder == ' ')
+			if (*objTypeRemainder == ' ')
 			{
-				tag2Remainder++;
+				objTypeRemainder++;
 			}
 
 			/*
@@ -538,7 +540,7 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 			 */
 			char extname[PG_NAMEDATALEN] = { 0 };
 
-			strlcpy(extname, tag2Remainder, sizeof(extname));
+			strlcpy(extname, objTypeRemainder, sizeof(extname));
 
 			size_t extLen = strlen(extname);
 
@@ -559,11 +561,11 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 			item->tagType = ARCHIVE_TAG_TYPE_EXTENSION;
 
 			/*
-			 * tag2Remainder, not extname: pg_restore keeps the trailing
+			 * objTypeRemainder, not extname: pg_restore keeps the trailing
 			 * space after the extension name even with no owner to
 			 * follow it, and useListRemainder reproduces the line as-is.
 			 */
-			size_t ulrBytes = strlen(item->innerDescText) + strlen(tag2Remainder) + 4;
+			size_t ulrBytes = strlen(item->objectTypeText) + strlen(objTypeRemainder) + 4;
 
 			item->useListRemainder = (char *) calloc(ulrBytes, sizeof(char));
 
@@ -574,7 +576,7 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 			}
 
 			sformat(item->useListRemainder, ulrBytes, "- %s %s",
-					item->innerDescText, tag2Remainder);
+					item->objectTypeText, objTypeRemainder);
 
 			return true;
 		}

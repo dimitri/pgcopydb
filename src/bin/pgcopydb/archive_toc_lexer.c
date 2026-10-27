@@ -1023,19 +1023,20 @@ char *yytext;
  * which matches the rest of the line verbatim in one token for
  * archive_toc_parser.c's shape-table-driven parser to split.
  *
- * One exception: when this lexer is re-entered to recognize TAG2 inside
- * an ACL or COMMENT entry's remainder (see archive_toc_lex_tag2_line), and
- * TAG2 is one that owns an identifier of its own -- a relation, column,
- * constraint, trigger, policy or rule name -- that name can be double-
- * quoted by pg_dump's fmtId(), which genuinely is lexical work (unescaping
- * a quoted token), not a shape-splitting one. So TAG2's own remainder
- * switches to the TAG2BODY start condition instead, which tokenizes it
- * properly: IDENT (plain or double-quoted, mirroring scan.l's <xd> state
- * for quoted identifiers), DOT, and the two literal markers the "name ON
- * relname" shape and its "ON DOMAIN" exclusion need, ON and DOMAIN. The
- * owner field that can follow is, like everywhere else in this format,
- * never escaped or quoted, so it's still grabbed as one raw REMAINDER
- * token (via archive_toc_begin_remainder) rather than tokenized.
+ * One exception: when this lexer is re-entered to recognize the object
+ * type inside an ACL or COMMENT entry's remainder (see
+ * archive_toc_lex_object_type_line), and that object type is one that owns
+ * an identifier of its own -- a relation, column, constraint, trigger,
+ * policy or rule name -- that name can be double-quoted by pg_dump's
+ * fmtId(), which genuinely is lexical work (unescaping a quoted token),
+ * not a shape-splitting one. So the object type's own remainder switches
+ * to the OBJTYPEBODY start condition instead, which tokenizes it properly:
+ * IDENT (plain or double-quoted, mirroring scan.l's <xd> state for quoted
+ * identifiers), DOT, and the two literal markers the "name ON relname"
+ * shape and its "ON DOMAIN" exclusion need, ON and DOMAIN. The owner field
+ * that can follow is, like everywhere else in this format, never escaped
+ * or quoted, so it's still grabbed as one raw REMAINDER token (via
+ * archive_toc_begin_remainder) rather than tokenized.
  */
 
 #include <stdlib.h>
@@ -1048,19 +1049,19 @@ char *yytext;
 #include "archive_toc_lexer.h"
 
 static int archive_toc_tag_token(ArchiveItemDesc desc);
-static int archive_toc_tag2_word_token(void);
-static bool archive_toc_tag2_has_ident(ArchiveItemDesc desc);
+static int archive_toc_object_type_word_token(void);
+static bool archive_toc_object_type_has_ident(ArchiveItemDesc desc);
 static void archive_toc_ident_append(const char *s, int len);
 
-#line 1056 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.c"
+#line 1057 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.c"
 #define YY_NO_INPUT 1
 
-#line 1059 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.c"
+#line 1060 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.c"
 
 #define INITIAL 0
 #define REMAINDER 1
-#define TAG2BODY 2
-#define TAG2QIDENT 3
+#define OBJTYPEBODY 2
+#define OBJTYPEQIDENT 3
 
 #ifndef YY_NO_UNISTD_H
 /* Special case for "unistd.h", since it is non-ANSI. We include it way
@@ -1273,10 +1274,10 @@ YY_DECL
 		}
 
 	{
-#line 70 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 71 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 
 
-#line 1280 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.c"
+#line 1281 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.c"
 
 	while ( /*CONSTCOND*/1 )		/* loops until end-of-file is reached */
 		{
@@ -1331,404 +1332,404 @@ do_action:	/* This label is used only to access EOF actions. */
 
 case 1:
 YY_RULE_SETUP
-#line 74 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 75 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { archive_toc_last_oid = strtoull(yytext, NULL, 10);
                                      return ARCHIVE_TOC_TOKEN_OID; }
 	YY_BREAK
 case 2:
 YY_RULE_SETUP
-#line 76 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 77 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return ARCHIVE_TOC_TOKEN_SEMICOLON; }
 	YY_BREAK
 case 3:
 YY_RULE_SETUP
-#line 77 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 78 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return ARCHIVE_TOC_TOKEN_SPACE; }
 	YY_BREAK
 case 4:
 YY_RULE_SETUP
-#line 78 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 79 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return ARCHIVE_TOC_TOKEN_DASH; }
 	YY_BREAK
 case 5:
 YY_RULE_SETUP
-#line 80 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 81 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_ACCESS_METHOD); }
 	YY_BREAK
 case 6:
 YY_RULE_SETUP
-#line 81 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 82 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_ACL); }
 	YY_BREAK
 case 7:
 YY_RULE_SETUP
-#line 82 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 83 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_AGGREGATE); }
 	YY_BREAK
 case 8:
 YY_RULE_SETUP
-#line 83 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 84 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_ATTRDEF); }
 	YY_BREAK
 case 9:
 YY_RULE_SETUP
-#line 84 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 85 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_BLOB_DATA); }
 	YY_BREAK
 case 10:
 YY_RULE_SETUP
-#line 85 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 86 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_BLOB); }
 	YY_BREAK
 case 11:
 YY_RULE_SETUP
-#line 86 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 87 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_CAST); }
 	YY_BREAK
 case 12:
 YY_RULE_SETUP
-#line 87 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 88 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_CHECK_CONSTRAINT); }
 	YY_BREAK
 case 13:
 YY_RULE_SETUP
-#line 88 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 89 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_COLLATION); }
 	YY_BREAK
 case 14:
 YY_RULE_SETUP
-#line 89 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 90 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_COLUMN); }
 	YY_BREAK
 case 15:
 YY_RULE_SETUP
-#line 90 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 91 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_COMMENT); }
 	YY_BREAK
 case 16:
 YY_RULE_SETUP
-#line 91 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 92 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_CONSTRAINT); }
 	YY_BREAK
 case 17:
 YY_RULE_SETUP
-#line 92 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 93 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_CONVERSION); }
 	YY_BREAK
 case 18:
 YY_RULE_SETUP
-#line 93 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 94 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_DATABASE); }
 	YY_BREAK
 case 19:
 YY_RULE_SETUP
-#line 94 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 95 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_DEFAULT_ACL); }
 	YY_BREAK
 case 20:
 YY_RULE_SETUP
-#line 95 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 96 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_DEFAULT); }
 	YY_BREAK
 case 21:
 YY_RULE_SETUP
-#line 96 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 97 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_DOMAIN); }
 	YY_BREAK
 case 22:
 YY_RULE_SETUP
-#line 97 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 98 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_DUMMY_TYPE); }
 	YY_BREAK
 case 23:
 YY_RULE_SETUP
-#line 98 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 99 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_EVENT_TRIGGER); }
 	YY_BREAK
 case 24:
 YY_RULE_SETUP
-#line 99 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 100 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_EXTENSION); }
 	YY_BREAK
 case 25:
 YY_RULE_SETUP
-#line 100 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 101 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_FK_CONSTRAINT); }
 	YY_BREAK
 case 26:
 YY_RULE_SETUP
-#line 101 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 102 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_FOREIGN_DATA_WRAPPER); }
 	YY_BREAK
 case 27:
 YY_RULE_SETUP
-#line 102 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 103 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_FOREIGN_SERVER); }
 	YY_BREAK
 case 28:
 YY_RULE_SETUP
-#line 103 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 104 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_FOREIGN_TABLE); }
 	YY_BREAK
 case 29:
 YY_RULE_SETUP
-#line 104 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 105 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_FUNCTION); }
 	YY_BREAK
 case 30:
 YY_RULE_SETUP
-#line 105 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 106 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_INDEX_ATTACH); }
 	YY_BREAK
 case 31:
 YY_RULE_SETUP
-#line 106 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 107 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_INDEX); }
 	YY_BREAK
 case 32:
 YY_RULE_SETUP
-#line 107 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 108 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_LANGUAGE); }
 	YY_BREAK
 case 33:
 YY_RULE_SETUP
-#line 108 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 109 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_LARGE_OBJECT); }
 	YY_BREAK
 case 34:
 YY_RULE_SETUP
-#line 109 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 110 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW); }
 	YY_BREAK
 case 35:
 YY_RULE_SETUP
-#line 110 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 111 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_MATERIALIZED_VIEW); }
 	YY_BREAK
 case 36:
 YY_RULE_SETUP
-#line 111 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 112 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_OPERATOR_CLASS); }
 	YY_BREAK
 case 37:
 YY_RULE_SETUP
-#line 112 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 113 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_OPERATOR_FAMILY); }
 	YY_BREAK
 case 38:
 YY_RULE_SETUP
-#line 113 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 114 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_OPERATOR); }
 	YY_BREAK
 case 39:
 YY_RULE_SETUP
-#line 114 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 115 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_POLICY); }
 	YY_BREAK
 case 40:
 YY_RULE_SETUP
-#line 115 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 116 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_PROCEDURAL_LANGUAGE); }
 	YY_BREAK
 case 41:
 YY_RULE_SETUP
-#line 116 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 117 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_PROCEDURE); }
 	YY_BREAK
 case 42:
 YY_RULE_SETUP
-#line 117 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 118 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_PUBLICATION_TABLES_IN_SCHEMA); }
 	YY_BREAK
 case 43:
 YY_RULE_SETUP
-#line 118 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 119 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_PUBLICATION_TABLE); }
 	YY_BREAK
 case 44:
 YY_RULE_SETUP
-#line 119 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 120 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_PUBLICATION); }
 	YY_BREAK
 case 45:
 YY_RULE_SETUP
-#line 120 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 121 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_ROW_SECURITY); }
 	YY_BREAK
 case 46:
 YY_RULE_SETUP
-#line 121 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 122 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_RULE); }
 	YY_BREAK
 case 47:
 YY_RULE_SETUP
-#line 122 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 123 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_SCHEMA); }
 	YY_BREAK
 case 48:
 YY_RULE_SETUP
-#line 123 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 124 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_SEQUENCE_OWNED_BY); }
 	YY_BREAK
 case 49:
 YY_RULE_SETUP
-#line 124 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 125 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_SEQUENCE_SET); }
 	YY_BREAK
 case 50:
 YY_RULE_SETUP
-#line 125 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 126 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_SEQUENCE); }
 	YY_BREAK
 case 51:
 YY_RULE_SETUP
-#line 126 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 127 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_SERVER); }
 	YY_BREAK
 case 52:
 YY_RULE_SETUP
-#line 127 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 128 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_SHELL_TYPE); }
 	YY_BREAK
 case 53:
 YY_RULE_SETUP
-#line 128 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 129 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_STATISTICS); }
 	YY_BREAK
 case 54:
 YY_RULE_SETUP
-#line 129 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 130 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_SUBSCRIPTION); }
 	YY_BREAK
 case 55:
 YY_RULE_SETUP
-#line 130 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 131 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TABLE_ATTACH); }
 	YY_BREAK
 case 56:
 YY_RULE_SETUP
-#line 131 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 132 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TABLE_DATA); }
 	YY_BREAK
 case 57:
 YY_RULE_SETUP
-#line 132 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 133 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TABLE); }
 	YY_BREAK
 case 58:
 YY_RULE_SETUP
-#line 133 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 134 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_CONFIGURATION); }
 	YY_BREAK
 case 59:
 YY_RULE_SETUP
-#line 134 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 135 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_DICTIONARY); }
 	YY_BREAK
 case 60:
 YY_RULE_SETUP
-#line 135 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 136 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_PARSER); }
 	YY_BREAK
 case 61:
 YY_RULE_SETUP
-#line 136 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 137 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_TEMPLATE); }
 	YY_BREAK
 case 62:
 YY_RULE_SETUP
-#line 137 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 138 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TRANSFORM); }
 	YY_BREAK
 case 63:
 YY_RULE_SETUP
-#line 138 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 139 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TRIGGER); }
 	YY_BREAK
 case 64:
 YY_RULE_SETUP
-#line 139 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 140 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_TYPE); }
 	YY_BREAK
 case 65:
 YY_RULE_SETUP
-#line 140 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 141 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_USER_MAPPING); }
 	YY_BREAK
 case 66:
 YY_RULE_SETUP
-#line 141 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 142 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return archive_toc_tag_token(ARCHIVE_TAG_VIEW); }
 	YY_BREAK
 case 67:
 YY_RULE_SETUP
-#line 143 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 144 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return ARCHIVE_TOC_TOKEN_UNKNOWN; }
 	YY_BREAK
 
 
 case 68:
 YY_RULE_SETUP
-#line 149 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 150 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { BEGIN(INITIAL); return ARCHIVE_TOC_TOKEN_REMAINDER; }
 	YY_BREAK
 
 
 case 69:
 YY_RULE_SETUP
-#line 155 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 156 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return ARCHIVE_TOC_TOKEN_SPACE; }
 	YY_BREAK
 case 70:
 YY_RULE_SETUP
-#line 156 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 157 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return ARCHIVE_TOC_TOKEN_DOT; }
 	YY_BREAK
 case 71:
 YY_RULE_SETUP
-#line 158 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
-{ BEGIN(TAG2QIDENT);
+#line 159 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+{ BEGIN(OBJTYPEQIDENT);
                                      archive_toc_ident[0] = '\0'; }
 	YY_BREAK
 case 72:
 /* rule 72 can match eol */
 YY_RULE_SETUP
-#line 161 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
-{ return archive_toc_tag2_word_token(); }
+#line 162 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+{ return archive_toc_object_type_word_token(); }
 	YY_BREAK
 
 
 case 73:
 YY_RULE_SETUP
-#line 167 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 168 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { archive_toc_ident_append("\"", 1); }
 	YY_BREAK
 case 74:
 YY_RULE_SETUP
-#line 168 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
-{ BEGIN(TAG2BODY);
+#line 169 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+{ BEGIN(OBJTYPEBODY);
                                      return ARCHIVE_TOC_TOKEN_IDENT; }
 	YY_BREAK
 case 75:
 /* rule 75 can match eol */
 YY_RULE_SETUP
-#line 170 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 171 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { archive_toc_ident_append(yytext, yyleng); }
 	YY_BREAK
 
 case YY_STATE_EOF(INITIAL):
 case YY_STATE_EOF(REMAINDER):
-case YY_STATE_EOF(TAG2BODY):
-case YY_STATE_EOF(TAG2QIDENT):
-#line 174 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+case YY_STATE_EOF(OBJTYPEBODY):
+case YY_STATE_EOF(OBJTYPEQIDENT):
+#line 175 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 { return ARCHIVE_TOC_TOKEN_EOF; }
 	YY_BREAK
 case 76:
 YY_RULE_SETUP
-#line 176 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 177 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 ECHO;
 	YY_BREAK
-#line 1732 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.c"
+#line 1733 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.c"
 
 	case YY_END_OF_BUFFER:
 		{
@@ -2695,30 +2696,30 @@ void yyfree (void * ptr )
 
 #define YYTABLES_NAME "yytables"
 
-#line 176 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
+#line 177 "/home/dim/dev/PostgreSQL/pgcopydb-toc-lexer/src/bin/pgcopydb/archive_toc_lexer.l"
 
 
 /*
  * archive_toc_tag_token switches the lexer to the REMAINDER start
  * condition (the text after a TAG is not otherwise tokenized) -- except
- * when scanning a TAG2 (see archive_toc_lex_tag2_line) that owns an
- * identifier of its own, which switches to TAG2BODY instead, so that
- * identifier can be unescaped properly. Either way, returns a single
- * ARCHIVE_TOC_TOKEN_DESC token; the specific ArchiveItemDesc is left in
- * archive_toc_last_desc for the caller to read (flex's generated yylex()
- * returns only an int, so this is the same out-of-band-value idiom the
- * grammar needs for the OID token's parsed value too -- see
- * archive_toc_last_oid in archive_toc_lexer.h).
+ * when scanning an object type (see archive_toc_lex_object_type_line)
+ * that owns an identifier of its own, which switches to OBJTYPEBODY
+ * instead, so that identifier can be unescaped properly. Either way,
+ * returns a single ARCHIVE_TOC_TOKEN_DESC token; the specific
+ * ArchiveItemDesc is left in archive_toc_last_desc for the caller to read
+ * (flex's generated yylex() returns only an int, so this is the same
+ * out-of-band-value idiom the grammar needs for the OID token's parsed
+ * value too -- see archive_toc_last_oid in archive_toc_lexer.h).
  */
 ArchiveItemDesc archive_toc_last_desc;
 uint64_t archive_toc_last_oid;
 char archive_toc_last_desc_text[BUFSIZE];
 char archive_toc_ident[PG_NAMEDATALEN];
 
-static bool archive_toc_tag2_mode = false;
+static bool archive_toc_object_type_mode = false;
 
 static bool
-archive_toc_tag2_has_ident(ArchiveItemDesc desc)
+archive_toc_object_type_has_ident(ArchiveItemDesc desc)
 {
 	switch (desc)
 	{
@@ -2752,9 +2753,9 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 	strlcpy(archive_toc_last_desc_text, yytext,
 			sizeof(archive_toc_last_desc_text));
 
-	if (archive_toc_tag2_mode && archive_toc_tag2_has_ident(desc))
+	if (archive_toc_object_type_mode && archive_toc_object_type_has_ident(desc))
 	{
-		BEGIN(TAG2BODY);
+		BEGIN(OBJTYPEBODY);
 	}
 	else
 	{
@@ -2766,17 +2767,17 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 
 
 /*
- * archive_toc_tag2_word_token classifies a plain (unquoted) word matched
- * in TAG2BODY: either one of the two literal markers the "name ON
- * relname" shape and its "ON DOMAIN" exclusion need (ON, DOMAIN), or a
- * plain identifier. Mirrors scan.l's own approach of matching a generic
- * word first and classifying it against a keyword set afterward, rather
- * than relying on flex's longest-match/rule-order tie-breaking between a
- * literal keyword rule and a generic identifier rule -- the exact kind of
- * declaration-order hazard this lexer exists to get rid of.
+ * archive_toc_object_type_word_token classifies a plain (unquoted) word
+ * matched in OBJTYPEBODY: either one of the two literal markers the
+ * "name ON relname" shape and its "ON DOMAIN" exclusion need (ON, DOMAIN),
+ * or a plain identifier. Mirrors scan.l's own approach of matching a
+ * generic word first and classifying it against a keyword set afterward,
+ * rather than relying on flex's longest-match/rule-order tie-breaking
+ * between a literal keyword rule and a generic identifier rule -- the
+ * exact kind of declaration-order hazard this lexer exists to get rid of.
  */
 static int
-archive_toc_tag2_word_token(void)
+archive_toc_object_type_word_token(void)
 {
 	if (streq(yytext, "ON"))
 	{
@@ -2797,9 +2798,9 @@ archive_toc_tag2_word_token(void)
 /*
  * archive_toc_ident_append appends to archive_toc_ident, the accumulator
  * for a double-quoted identifier being scanned across possibly several
- * TAG2QIDENT matches (plain runs of non-quote characters, and one single
- * escaped quote per "" match) -- the same role litbuf/addlit play in
- * scan.l's own <xd> state.
+ * OBJTYPEQIDENT matches (plain runs of non-quote characters, and one
+ * single escaped quote per "" match) -- the same role litbuf/addlit play
+ * in scan.l's own <xd> state.
  */
 static void
 archive_toc_ident_append(const char *s, int len)
@@ -2823,11 +2824,11 @@ archive_toc_ident_append(const char *s, int len)
  * archive_toc_begin_remainder switches the lexer to the REMAINDER start
  * condition without matching a TAG first, so a caller that has just
  * finished parsing some structured prefix of the current scan buffer
- * (TAG2's own identifier(s), see parseAclOrCommentRemainder in
+ * (the object type's own identifier(s), see parseAclOrCommentRemainder in
  * archive_toc_parser.c) can grab everything left as one raw token. This
  * is how the owner field is captured: like everywhere else in this
  * format, it is never itself escaped or quoted, so there is nothing for
- * TAG2BODY's identifier-aware tokenizing to do with it.
+ * OBJTYPEBODY's identifier-aware tokenizing to do with it.
  */
 void
 archive_toc_begin_remainder(void)
@@ -2837,32 +2838,33 @@ archive_toc_begin_remainder(void)
 
 
 /*
- * archive_toc_lex_line and archive_toc_lex_tag2_line scan exactly one
- * line (no trailing newline expected or required) or, for the latter, one
- * TAG2 substring, ready for the caller to pull tokens from with repeated
- * archive_toc_lex() calls. Both free the previous scan's buffer, if any
- * -- yy_scan_string allocates a fresh one every call, and a TOC can have
- * many thousands of lines. BEGIN(INITIAL) resets the start condition so a
- * previous scan's dangling REMAINDER/TAG2BODY/TAG2QIDENT state (there
- * shouldn't be one, since a well-formed scan always ends on its own
- * REMAINDER token, but a malformed one could in principle stop early)
- * can never leak into the next call.
+ * archive_toc_lex_line and archive_toc_lex_object_type_line scan exactly
+ * one line (no trailing newline expected or required) or, for the latter,
+ * one object-type substring, ready for the caller to pull tokens from
+ * with repeated archive_toc_lex() calls. Both free the previous scan's
+ * buffer, if any -- yy_scan_string allocates a fresh one every call, and
+ * a TOC can have many thousands of lines. BEGIN(INITIAL) resets the start
+ * condition so a previous scan's dangling REMAINDER/OBJTYPEBODY/
+ * OBJTYPEQIDENT state (there shouldn't be one, since a well-formed scan
+ * always ends on its own REMAINDER token, but a malformed one could in
+ * principle stop early) can never leak into the next call.
  *
- * The two differ only in archive_toc_tag2_mode, which archive_toc_tag_token
- * reads to decide whether a matched TAG owning its own identifier should
- * switch to TAG2BODY (tokenized) instead of REMAINDER (raw) -- see there.
+ * The two differ only in archive_toc_object_type_mode, which
+ * archive_toc_tag_token reads to decide whether a matched TAG owning its
+ * own identifier should switch to OBJTYPEBODY (tokenized) instead of
+ * REMAINDER (raw) -- see there.
  */
 static YY_BUFFER_STATE archive_toc_buffer;
 
 static void
-archive_toc_lex_start(const char *line, bool tag2Mode)
+archive_toc_lex_start(const char *line, bool objectTypeMode)
 {
 	if (archive_toc_buffer != NULL)
 	{
 		archive_toc__delete_buffer(archive_toc_buffer);
 	}
 
-	archive_toc_tag2_mode = tag2Mode;
+	archive_toc_object_type_mode = objectTypeMode;
 	archive_toc_buffer = archive_toc__scan_string(line);
 	BEGIN(INITIAL);
 }
@@ -2876,7 +2878,7 @@ archive_toc_lex_line(const char *line)
 
 
 void
-archive_toc_lex_tag2_line(const char *line)
+archive_toc_lex_object_type_line(const char *line)
 {
 	archive_toc_lex_start(line, true);
 }

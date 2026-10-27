@@ -167,9 +167,9 @@ typedef enum
 	ARCHIVE_SHAPE_RELATION,
 
 	/*
-	 * ACL or COMMENT: "<namespace> <TAG2> ...", recursing into one of the
-	 * shapes above (picked by TAG2, not by the outer ACL/COMMENT tag) for
-	 * the remainder after TAG2.
+	 * ACL or COMMENT: "<namespace> <objectType> ...", recursing into one
+	 * of the shapes above (picked by objectType, not by the outer
+	 * ACL/COMMENT tag) for the remainder after it.
 	 */
 	ARCHIVE_SHAPE_ACL_OR_COMMENT,
 
@@ -193,10 +193,16 @@ typedef enum
  * into relname/name below (pg_dump has no separate field for it, it's one
  * composite string). Our nspname and owner do match pg_dump's own naming
  * (nspname is dumpACL's own parameter name for the same thing; owner is
- * te->owner verbatim). pg_dump itself has no name or abstraction for what
- * we call "TAG2" (the nested keyword inside an ACL/COMMENT's tag, e.g.
- * TRIGGER or COLUMN) or "shape" below -- both are this parser's own
- * invention, not something pg_dump already names and we failed to reuse.
+ * te->owner verbatim).
+ *
+ * What we call objectType (the nested keyword inside an ACL/COMMENT's tag,
+ * e.g. TRIGGER or COLUMN) is named after backend/nodes/parsenodes.h's own
+ * ObjectType enum and its objtype field in CommentStmt, SecLabelStmt and
+ * GrantStmt -- the parse-tree representation of exactly the statements
+ * (COMMENT ON, SECURITY LABEL, GRANT/REVOKE) these archive entries are the
+ * already-executed result of. "shape" below has no such precedent -- it's
+ * this parser's own invention, not something pg_dump or the backend already
+ * names and we failed to reuse.
  */
 typedef struct ArchiveContentItem
 {
@@ -228,22 +234,25 @@ typedef struct ArchiveContentItem
 	char owner[PG_NAMEDATALEN];     /* role name; may be empty, never NULL */
 
 	/*
-	 * Set when shape == ARCHIVE_SHAPE_ACL_OR_COMMENT: innerDesc is TAG2
-	 * (e.g. ARCHIVE_TAG_COLUMN, ARCHIVE_TAG_TRIGGER, ...), and
-	 * hasNamespace/nspname/relname/name/owner above describe TAG2's own
-	 * remainder, parsed per TAG2's shape, not the outer ACL/COMMENT tag.
+	 * Set when shape == ARCHIVE_SHAPE_ACL_OR_COMMENT: objectType is the
+	 * SQL object type this ACL/COMMENT is attached to (e.g.
+	 * ARCHIVE_TAG_COLUMN, ARCHIVE_TAG_TRIGGER, ...; see the naming note
+	 * above), and hasNamespace/nspname/relname/name/owner above describe
+	 * its own remainder, parsed per its own shape, not the outer
+	 * ACL/COMMENT tag.
 	 */
-	ArchiveItemDesc innerDesc;
-	char *innerDescText;         /* malloc'ed area; TAG2's own raw keyword
-	                              * text (e.g. "COLUMN", "TRIGGER"), the same
-	                              * way description is the outer tag's */
+	ArchiveItemDesc objectType;
+	char *objectTypeText;        /* malloc'ed area; objectType's own raw
+	                              * keyword text (e.g. "COLUMN", "TRIGGER"),
+	                              * the same way description is the outer
+	                              * tag's */
 
 	/*
 	 * Set when shape == ARCHIVE_SHAPE_ACL_OR_COMMENT: the full original
-	 * remainder text, TAG2 included, exactly as pg_restore --list would
-	 * print it (e.g. "toc_fixture COLUMN parent.name postgres"). Distinct
-	 * from restoreListName on purpose: that field deliberately holds only
-	 * the *relation's* own name for filtering (see
+	 * remainder text, object type included, exactly as pg_restore --list
+	 * would print it (e.g. "toc_fixture COLUMN parent.name postgres").
+	 * Distinct from restoreListName on purpose: that field deliberately
+	 * holds only the *relation's* own name for filtering (see
 	 * finishRelationAclOrComment in archive_toc_parser.c), not a faithful
 	 * reproduction of this entry's own line -- useListRemainder is the
 	 * latter, for callers (e.g. --use-list) that need to write the line

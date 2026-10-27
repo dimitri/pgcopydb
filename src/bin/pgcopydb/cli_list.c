@@ -2495,9 +2495,9 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 
 		/*
 		 * useListRemainder, when set, is the faithful original-line text
-		 * (TAG2 included for an ACL/COMMENT entry); restoreListName is
-		 * deliberately not that for those entries (see its own comment in
-		 * pgcmd.h), so only fall back to it for entries that have no
+		 * (object type included for an ACL/COMMENT entry); restoreListName
+		 * is deliberately not that for those entries (see its own comment
+		 * in pgcmd.h), so only fall back to it for entries that have no
 		 * useListRemainder at all -- every non-ACL/COMMENT shape.
 		 */
 		const char *remainder =
