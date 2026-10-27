@@ -186,12 +186,22 @@ gen-sql: $(SRC_DIR)sql/sql_queries_data.inc
 FLEX ?= flex
 
 # archive_toc_lexer.c is generated from archive_toc_lexer.l and committed,
-# the same way sql_queries_data.inc is: regenerated here only when the .l
-# source is newer, so building from a checkout never requires flex.
-$(SRC_DIR)archive_toc_lexer.c: $(SRC_DIR)archive_toc_lexer.l
-	$(FLEX) -o $@ $<
-
-gen-lexer: $(SRC_DIR)archive_toc_lexer.c
+# so that building from a checkout never requires flex (PostgreSQL itself
+# requires flex/bison to build gram.c/scan.c from a git checkout, and only
+# ships pre-generated files in release tarballs; we don't want pgcopydb
+# checkouts to need flex at all, so unlike PostgreSQL's gram.c/scan.c,
+# archive_toc_lexer.c is tracked in git).
+#
+# gen-lexer is deliberately NOT wired up as a prerequisite of
+# archive_toc_lexer.c/.o: making it one, keyed on comparing the .c and .l
+# mtimes, previously regenerated the file on every build whose checkout
+# happened to leave archive_toc_lexer.l with the same or a newer mtime
+# than archive_toc_lexer.c (checkout order isn't guaranteed to match
+# git history, so that's not rare), breaking any build without flex
+# installed. Run `make gen-lexer` by hand after editing the .l file, and
+# commit the regenerated .c file along with it.
+gen-lexer:
+	$(FLEX) -o $(SRC_DIR)archive_toc_lexer.c $(SRC_DIR)archive_toc_lexer.l
 
 .PHONY: all monitor clean gen-sql gen-lexer
 .PHONY: VERSION-FILE

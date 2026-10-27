@@ -24,6 +24,7 @@ RUN dpkg --add-architecture ${TARGETARCH:-arm64} && apt update \
     sudo \
     valgrind \
     build-essential \
+    flex \
     libedit-dev \
     libgc-dev \
     libicu-dev \
