@@ -6,6 +6,7 @@ Uploaders:
  Christoph Berg <myon@debian.org>,
 Build-Depends:
  debhelper-compat (= 13),
+ flex,
  libedit-dev,
  libgc-dev,
  libkrb5-dev,

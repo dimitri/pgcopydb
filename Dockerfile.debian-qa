@@ -12,6 +12,7 @@ RUN apt-get update \
         devscripts \
         debhelper \
         autotools-dev \
+        flex \
         libgc-dev \
         libedit-dev \
         libpam0g-dev \

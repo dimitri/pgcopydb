@@ -14,8 +14,13 @@ SQLITE3_LIB = $(SQLITE3_DIR)sqlite3.o
 
 INCLUDES  = $(patsubst ${SRC_DIR}%.h,%.h,$(wildcard ${SRC_DIR}*.h))
 
-SRC   = $(patsubst ${SRC_DIR}%.c,%.c,$(wildcard ${SRC_DIR}*.c))
+# archive_toc_lexer.c is generated (see the flex rule below) rather than
+# hand-written, so it may not exist yet when this wildcard is evaluated on
+# a fresh checkout; exclude it here and add archive_toc_lexer.o below
+# unconditionally, instead of depending on the wildcard to find it.
+SRC   = $(patsubst ${SRC_DIR}%.c,%.c,$(filter-out ${SRC_DIR}archive_toc_lexer.c,$(wildcard ${SRC_DIR}*.c)))
 OBJS  = $(patsubst %.c,%.o,$(SRC))
+OBJS += archive_toc_lexer.o
 OBJS += lib-log.o lib-commandline.o lib-parson.o
 OBJS += lib-snprintf.o lib-strerror.o lib-dumputils.o lib-string_utils.o
 OBJS += lib-lookup3.o
@@ -185,23 +190,23 @@ gen-sql: $(SRC_DIR)sql/sql_queries_data.inc
 
 FLEX ?= flex
 
-# archive_toc_lexer.c is generated from archive_toc_lexer.l and committed,
-# so that building from a checkout never requires flex (PostgreSQL itself
-# requires flex/bison to build gram.c/scan.c from a git checkout, and only
-# ships pre-generated files in release tarballs; we don't want pgcopydb
-# checkouts to need flex at all, so unlike PostgreSQL's gram.c/scan.c,
-# archive_toc_lexer.c is tracked in git).
+# archive_toc_lexer.c is generated from archive_toc_lexer.l, the same way
+# PostgreSQL generates scan.c from scan.l: it's not tracked in git (see
+# .gitignore) and is rebuilt here whenever missing or older than the .l
+# source. Building from a checkout therefore requires flex, same as
+# PostgreSQL requires flex/bison to build from git.
 #
-# gen-lexer is deliberately NOT wired up as a prerequisite of
-# archive_toc_lexer.c/.o: making it one, keyed on comparing the .c and .l
-# mtimes, previously regenerated the file on every build whose checkout
-# happened to leave archive_toc_lexer.l with the same or a newer mtime
-# than archive_toc_lexer.c (checkout order isn't guaranteed to match
-# git history, so that's not rare), breaking any build without flex
-# installed. Run `make gen-lexer` by hand after editing the .l file, and
-# commit the regenerated .c file along with it.
-gen-lexer:
-	$(FLEX) -o $(SRC_DIR)archive_toc_lexer.c $(SRC_DIR)archive_toc_lexer.l
+# The target/prerequisite must be spelled with the same (here, relative)
+# names used elsewhere in this Makefile to build archive_toc_lexer.o --
+# $(SRC_DIR)-prefixed absolute paths are a different string to make, so
+# the implicit %.o: %.c chain wouldn't find this rule, falling back to
+# make's own built-in %.c: %.l rule (which runs plain "lex", not $(FLEX),
+# and treats the result as a disposable intermediate file, deleting it
+# right after the build).
+archive_toc_lexer.c: archive_toc_lexer.l
+	$(FLEX) -o $@ $<
+
+gen-lexer: archive_toc_lexer.c
 
 .PHONY: all monitor clean gen-sql gen-lexer
 .PHONY: VERSION-FILE

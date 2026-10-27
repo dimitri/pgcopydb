@@ -87,6 +87,7 @@ packages as Postgres itself:
   $ apt-get install -y --no-install-recommends \
       build-essential \
       autotools-dev \
+      flex \
       libedit-dev \
       libgc-dev \
       libpam0g-dev \
