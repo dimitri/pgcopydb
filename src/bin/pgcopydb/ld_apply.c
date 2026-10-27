@@ -160,9 +160,27 @@ stream_apply_catchup(StreamSpecs *specs)
 #define APPLY_DRAIN_STALL_LIMIT 300
 
 /*
+ * Pipeline sync batching, for a stream of many small transactions: how many
+ * transactions' worth of BEGIN..COMMIT may sit queued-but-unconfirmed on the
+ * apply connection, and how many seconds may elapse since the last sync,
+ * before stream_apply_transaction forces one anyway. Mirrors the "every ~1s,
+ * or end of file" policy #704 originally used (see git history) -- there is
+ * no "file" anymore in the SQLite-based replayDB design, so the count is
+ * this module's equivalent bound instead.  A DDL/message transaction, or
+ * endpos being reached, bypasses this and forces an immediate sync
+ * regardless of either threshold (see stream_apply_transaction).
+ */
+#define APPLY_PIPELINE_SYNC_MAX_PENDING_TXNS 100
+#define APPLY_PIPELINE_SYNC_INTERVAL_SECONDS 1
+
+/*
  * stream_apply_flush_pipeline makes the work queued on the apply connection
  * real: it drains the libpq pipeline, so every statement sent so far has
- * reached the server and had its result checked.
+ * reached the server and had its result checked. On success, it is also the
+ * one place that advances context->confirmedLSN: previousLSN only ever moves
+ * past a transaction whose BEGIN..COMMIT has already been queued (see
+ * stream_apply_transaction), so confirming the pipeline up to here confirms
+ * all of them at once, whether or not each one forced its own sync.
  *
  * The apply connection is in pipeline mode for its whole life (see
  * stream_apply_setup), which means pgsql_execute() only *queues* statements.
@@ -175,7 +193,17 @@ stream_apply_catchup(StreamSpecs *specs)
 static bool
 stream_apply_flush_pipeline(StreamApplyContext *context)
 {
-	return pgsql_flush_pipeline(&(context->applyPgConn));
+	if (!pgsql_flush_pipeline(&(context->applyPgConn)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	context->confirmedLSN = context->previousLSN;
+	context->pendingTxnCount = 0;
+	context->lastFlushTime = (uint64_t) time(NULL);
+
+	return true;
 }
 
 
@@ -196,6 +224,68 @@ stream_apply_state_progressed(const PipelineStateEntry *before,
 		   before->last_txn_complete != after->last_txn_complete ||
 		   before->last_txn_processed != after->last_txn_processed ||
 		   before->run_end_lsn != after->run_end_lsn;
+}
+
+
+/*
+ * stream_apply_check_upstream_done checks (and optionally waits up to
+ * timeoutMs on) the out-of-band "receive done" lifecycle pipe.
+ *
+ * Only call this with a non-zero timeoutMs from the genuinely idle path:
+ * no replay row, no transform progress, nothing left to do this pass.
+ * Calling it with a blocking timeout unconditionally at the top of every
+ * iteration -- its previous placement -- capped the whole apply loop at
+ * one iteration per ~100ms even when replayDB already had a row ready to
+ * process right now, which is a syscall away, not 100ms away: that showed
+ * up as a hard ceiling of ~5-10 transactions/second regardless of how
+ * fast each transaction itself applied. A timeoutMs of 0 (the fast path,
+ * called before even checking for a ready row) polls without blocking, so
+ * it costs nothing when there is work to do.
+ */
+static bool
+stream_apply_check_upstream_done(StreamSpecs *specs,
+								 StreamApplyContext *context,
+								 int *pipe_rd,
+								 int timeoutMs)
+{
+	if (specs->upstream_done || *pipe_rd < 0)
+	{
+		return true;
+	}
+
+	fd_set rfds;
+	FD_ZERO(&rfds);
+	FD_SET(*pipe_rd, &rfds);
+
+	struct timeval tv = {
+		.tv_sec = timeoutMs / 1000,
+		.tv_usec = (timeoutMs % 1000) * 1000
+	};
+
+	int nready = select(*pipe_rd + 1, &rfds, NULL, NULL, &tv);
+
+	if (nready < 0 && errno != EINTR)
+	{
+		log_error("apply select() on pipe: %m");
+		return false;
+	}
+
+	if (nready > 0 && FD_ISSET(*pipe_rd, &rfds))
+	{
+		(void) stream_recv_upstream_done(specs, *pipe_rd);
+		*pipe_rd = -1;
+
+		/* use signal LSN as our endpos if not already set */
+		if (context->endpos == InvalidXLogRecPtr &&
+			specs->upstream_done_lsn != InvalidXLogRecPtr)
+		{
+			context->endpos = specs->upstream_done_lsn;
+			log_info("Apply endpos set from receive signal: %X/%X",
+					 LSN_FORMAT_ARGS(context->endpos));
+		}
+	}
+
+	return true;
 }
 
 
@@ -267,6 +357,15 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 
 	specs->private.applyState = &current;
 
+	/*
+	 * Nothing is queued yet, so the fetch cursor and the confirmed cursor
+	 * start equal; see stream_apply_flush_pipeline and the batching
+	 * thresholds right above it for how (and when) they diverge.
+	 */
+	context->confirmedLSN = context->previousLSN;
+	context->pendingTxnCount = 0;
+	context->lastFlushTime = (uint64_t) time(NULL);
+
 	int syncCounter = 0;
 	int stalledPasses = 0;
 
@@ -275,37 +374,19 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		if (asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			log_info("Apply process received a shutdown signal, stopping");
-			break;
+			goto done;
 		}
 
-		/* ── check for upstream-done signal ──────────────────────────── */
-		if (!specs->upstream_done && pipe_rd >= 0)
+		/*
+		 * Check for the upstream-done signal, but don't wait on it: a
+		 * ready replay row is a syscall away, not 100ms away, so this
+		 * must never block the fast path.  The genuine wait for this
+		 * signal happens below, only once this pass finds nothing to do.
+		 */
+		if (!stream_apply_check_upstream_done(specs, context, &pipe_rd, 0))
 		{
-			fd_set rfds;
-			FD_ZERO(&rfds);
-			FD_SET(pipe_rd, &rfds);
-			struct timeval tv = { .tv_sec = 0, .tv_usec = 100 * 1000 };
-
-			int nready = select(pipe_rd + 1, &rfds, NULL, NULL, &tv);
-			if (nready < 0 && errno != EINTR)
-			{
-				log_error("apply select() on pipe: %m");
-				return false;
-			}
-			if (nready > 0 && FD_ISSET(pipe_rd, &rfds))
-			{
-				(void) stream_recv_upstream_done(specs, pipe_rd);
-				pipe_rd = -1;
-
-				/* use signal LSN as our endpos if not already set */
-				if (context->endpos == InvalidXLogRecPtr &&
-					specs->upstream_done_lsn != InvalidXLogRecPtr)
-				{
-					context->endpos = specs->upstream_done_lsn;
-					log_info("Apply endpos set from receive signal: %X/%X",
-							 LSN_FORMAT_ARGS(context->endpos));
-				}
-			}
+			success = false;
+			goto done;
 		}
 
 		/*
@@ -317,7 +398,8 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		if (!semaphore_lock(&(replayDB->sema)))
 		{
 			/* errors have already been logged */
-			return false;
+			success = false;
+			goto done;
 		}
 		lock_held = true;
 
@@ -328,7 +410,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		{
 			/* errors have already been logged */
 			success = false;
-			break;
+			goto done;
 		}
 
 		if (s.action == STREAM_ACTION_UNKNOWN)
@@ -340,6 +422,22 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			 */
 			semaphore_unlock(&(replayDB->sema));
 			lock_held = false;
+
+			/*
+			 * There is no more immediately-available work right now: this
+			 * is the natural point to confirm whatever got batched on the
+			 * pipeline rather than wait for APPLY_PIPELINE_SYNC_INTERVAL_SECONDS
+			 * to elapse on its own, since there is nothing left to batch it
+			 * with anyway. Without this, a batch that happened to fill up
+			 * right as the source went idle could stay unconfirmed (and
+			 * replay_lsn stay stale) for as long as the source stays idle.
+			 */
+			if (context->pendingTxnCount > 0 &&
+				!stream_apply_flush_pipeline(context))
+			{
+				success = false;
+				goto done;
+			}
 
 			/*
 			 * Replay is drained.  Snapshot the in-memory apply state, then
@@ -369,7 +467,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				log_error("Failed to transform from outputDB, "
 						  "see above for details");
 				success = false;
-				break;
+				goto done;
 			}
 
 			if (specs->private.midTxnEndpos)
@@ -397,11 +495,11 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				if (!stream_apply_flush_pipeline(context))
 				{
 					success = false;
-					break;
+					goto done;
 				}
 
 				(void) stream_apply_sync_sentinel(context, false);
-				break;
+				goto done;
 			}
 
 			if (!stream_apply_sync_sentinel(context, false))
@@ -417,7 +515,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				log_notice("Apply reached end position %X/%X at LSN %X/%X",
 						   LSN_FORMAT_ARGS(context->endpos),
 						   LSN_FORMAT_ARGS(context->previousLSN));
-				break;
+				goto done;
 			}
 
 			/*
@@ -460,7 +558,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				log_error("Failed to look up the transactions left to apply "
 						  "in outputDB, see above for details");
 				success = false;
-				break;
+				goto done;
 			}
 
 			/*
@@ -543,11 +641,11 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 					if (!stream_apply_flush_pipeline(context))
 					{
 						success = false;
-						break;
+						goto done;
 					}
 
 					(void) stream_apply_sync_sentinel(context, false);
-					break;
+					goto done;
 				}
 
 				/*
@@ -571,17 +669,29 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 							  LSN_FORMAT_ARGS(context->previousLSN));
 
 					success = false;
-					break;
+					goto done;
 				}
 			}
 
 			/*
-			 * Not caught up yet.  In pipe mode the select() ceiling gives
-			 * ≤100 ms latency; with no pipe left to wait on, sleep briefly so
-			 * a count of idle passes is also a wall-clock bound.  Passes that
-			 * produced work have already continued above.
+			 * Not caught up yet, and this pass produced no work (a pass
+			 * that did has already continued above).  This is the one
+			 * place in the loop that should actually wait: block on the
+			 * upstream-done pipe for up to 100ms, so a receive completion
+			 * is noticed promptly without busy-looping, and so idle passes
+			 * remain wall-clock bounded. With no pipe left to wait on
+			 * (catchup-only mode), fall back to a plain sleep instead.
 			 */
-			if (pipe_rd < 0)
+			if (pipe_rd >= 0)
+			{
+				if (!stream_apply_check_upstream_done(specs, context,
+													  &pipe_rd, 100))
+				{
+					success = false;
+					goto done;
+				}
+			}
+			else
 			{
 				pg_usleep(100 * 1000);  /* 100 ms */
 			}
@@ -645,9 +755,22 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				 *
 				 * follow_reached_endpos() detects this case via its secondary
 				 * pipeline_state check (both transform and apply 'done').
+				 *
+				 * This transaction was never applied, but an earlier one
+				 * may still be sitting in an unconfirmed batch (see
+				 * APPLY_PIPELINE_SYNC_MAX_PENDING_TXNS): confirm it before
+				 * publishing "done", same reason as everywhere else in
+				 * this function that reaches endpos.
 				 */
+				if (context->pendingTxnCount > 0 &&
+					!stream_apply_flush_pipeline(context))
+				{
+					success = false;
+					goto done;
+				}
+
 				(void) stream_apply_sync_sentinel(context, false);
-				break;
+				goto done;
 			}
 
 			/*
@@ -689,7 +812,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			{
 				/* errors have already been logged */
 				success = false;
-				break;
+				goto done;
 			}
 
 			/* Transaction applied to target: record completion in-memory. */
@@ -717,7 +840,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				if (!stream_apply_flush_pipeline(context))
 				{
 					success = false;
-					break;
+					goto done;
 				}
 
 				/*
@@ -728,7 +851,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				 * when endpos falls between or inside transactions.
 				 */
 				(void) stream_apply_sync_sentinel(context, false);
-				break;
+				goto done;
 			}
 		}
 		else
@@ -756,7 +879,7 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 						  s.action,
 						  LSN_FORMAT_ARGS(s.lsn));
 				success = false;
-				break;
+				goto done;
 			}
 
 			if (s.action == STREAM_ACTION_KEEPALIVE)
@@ -793,18 +916,31 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 		}
 	}
 
+done:
 	if (lock_held)
 	{
 		(void) semaphore_unlock(&(replayDB->sema));
 	}
 
 	/*
-	 * Last chance to make queued work real before this process goes away: any
-	 * other exit from the loop above (including error paths, where nothing is
-	 * committed and the flush is a no-op) must not leave COMMITs sitting in
-	 * the pipeline buffer for PQfinish() to discard.
+	 * Last chance to make queued work real before this process goes away.
+	 * Every exit from the loop above, success or failure, funnels through
+	 * this label: a batch (see APPLY_PIPELINE_SYNC_MAX_PENDING_TXNS) can be
+	 * sitting queued-but-unconfirmed from transactions applied *before*
+	 * whatever just ended the loop, and this is its last chance to land
+	 * before PQfinish() would otherwise discard it.
+	 *
+	 * Attempted unconditionally, even when success is already false: most
+	 * exits above already flushed (and checked the result) right before
+	 * jumping here, so for them this is a second, cheap call with nothing
+	 * left to confirm. For the exits that could not flush on their own way
+	 * out -- the ones here with nothing already pending to lose, such as a
+	 * signal or a failed lookup -- this is the only chance, and skipping it
+	 * would silently strand a batch applied earlier in the same run.
+	 * pgsql_sync_pipeline's own retry and timeout handling means this
+	 * cannot hang indefinitely even on a connection already in trouble.
 	 */
-	if (success && !stream_apply_flush_pipeline(context))
+	if (!stream_apply_flush_pipeline(context))
 	{
 		/* errors have already been logged */
 		success = false;
@@ -875,6 +1011,17 @@ stream_apply_transaction(StreamApplyContext *context,
 
 	bool success = true;
 	char commitTimestamp[PG_MAX_TIMESTAMP] = { 0 };
+
+	/*
+	 * Set when any row in this transaction is a decoded DDL/message
+	 * envelope (see stream_apply_dml's STREAM_ACTION_MESSAGE case). Such a
+	 * transaction forces an immediate pipeline sync at COMMIT, bypassing
+	 * the batching thresholds below: a schema change is exactly the kind
+	 * of rare, operator-visible event that must be confirmed on the
+	 * target the moment it is replayed, not whenever a later, unrelated
+	 * transaction happens to fill the batch.
+	 */
+	bool containsMessage = false;
 
 	/*
 	 * Per-transaction sent-REFRESH set: when the first DML row targeting a
@@ -1027,6 +1174,11 @@ stream_apply_transaction(StreamApplyContext *context,
 			}
 		}
 
+		if (s->action == STREAM_ACTION_MESSAGE)
+		{
+			containsMessage = true;
+		}
+
 		if (!stream_apply_dml(context, s))
 		{
 			/* errors have already been logged */
@@ -1087,37 +1239,60 @@ stream_apply_transaction(StreamApplyContext *context,
 		return false;
 	}
 
-	/*
-	 * Make this COMMIT real before trusting it: pgsql_execute() only
-	 * queues on a pipelined connection (see stream_apply_flush_pipeline),
-	 * and libpq does not actually write queued data to the socket until
-	 * either the queue reaches 64kB (OUTBUFFER_THRESHOLD, pqPipelineFlush
-	 * in libpq's fe-exec.c) or an explicit sync is requested. A single
-	 * transaction's worth of SQL text essentially never reaches 64kB, so
-	 * without this, the whole transaction -- BEGIN through COMMIT --
-	 * stays sitting in the client process's own memory, never reaching
-	 * the target server at all, while this function already advances
-	 * previousLSN and the sentinel below as if it had. The apply loop
-	 * then goes back to idling for more upstream work, believing this
-	 * transaction is done.
-	 */
-	if (!stream_apply_flush_pipeline(context))
-	{
-		/* errors have already been logged */
-		context->transactionInProgress = false;
-		return false;
-	}
-
 	context->transactionInProgress = false;
 	context->previousLSN = commitLSN;
+	context->pendingTxnCount += 1;
 
-	bool findDurableLSN = false;
+	/*
+	 * pgsql_execute() only *queues* on a pipelined connection (see
+	 * stream_apply_flush_pipeline), and libpq does not actually write
+	 * queued data to the socket until either the queue reaches 64kB
+	 * (OUTBUFFER_THRESHOLD, pqPipelineFlush in libpq's fe-exec.c) or an
+	 * explicit sync is requested. A single transaction's worth of SQL
+	 * text essentially never reaches 64kB on its own, so left alone, this
+	 * COMMIT -- and everything after it -- would sit in the client
+	 * process's own memory indefinitely.
+	 *
+	 * Rather than pay a sync's round trip for every transaction (which
+	 * would undo the whole point of pipelining -- see
+	 * APPLY_PIPELINE_SYNC_MAX_PENDING_TXNS above), force one now only when
+	 * it cannot wait:
+	 *
+	 *  - endpos reached (sync): the caller is about to publish replay_lsn
+	 *    as "done" and may act on that (e.g. exit) right after.
+	 *  - containsMessage: a DDL/message transaction must be confirmed on
+	 *    the target the moment it is replayed, not whenever a later,
+	 *    unrelated transaction happens to fill the batch.
+	 *  - the batch has grown large enough, or stale enough, on its own.
+	 *
+	 * Otherwise this transaction simply joins the pipelined batch: the
+	 * driver loop (stream_apply_replaydb) flushes it once there is no
+	 * more immediately-available work, which bounds how long it can stay
+	 * unconfirmed without forcing a sync on every single transaction.
+	 */
+	bool mustSyncNow =
+		sync ||
+		containsMessage ||
+		context->pendingTxnCount >= APPLY_PIPELINE_SYNC_MAX_PENDING_TXNS ||
+		((uint64_t) time(NULL) - context->lastFlushTime) >=
+		APPLY_PIPELINE_SYNC_INTERVAL_SECONDS;
 
-	if (!stream_apply_sync_sentinel(context, findDurableLSN))
+	if (mustSyncNow)
 	{
-		log_warn("Failed to sync sentinel after xid %u at %X/%X, "
-				 "will retry on next iteration",
-				 xid, LSN_FORMAT_ARGS(commitLSN));
+		if (!stream_apply_flush_pipeline(context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		bool findDurableLSN = false;
+
+		if (!stream_apply_sync_sentinel(context, findDurableLSN))
+		{
+			log_warn("Failed to sync sentinel after xid %u at %X/%X, "
+					 "will retry on next iteration",
+					 xid, LSN_FORMAT_ARGS(commitLSN));
+		}
 	}
 
 	/*
@@ -1628,13 +1803,18 @@ stream_apply_sync_sentinel(StreamApplyContext *context, bool findDurableLSN)
 	uint64_t durableLSN = InvalidXLogRecPtr;
 
 	/*
-	 * At endpos, publish the last LSN the apply actually committed. It is not
-	 * necessarily endpos: endpos can fall between or inside transactions, and
+	 * Publish the last LSN the target has actually confirmed, not merely
+	 * queued: context->confirmedLSN only advances inside
+	 * stream_apply_flush_pipeline, once a pipeline sync has checked the
+	 * result of every BEGIN..COMMIT sent so far (see there, and the
+	 * batching thresholds above it -- a transaction's COMMIT can be queued
+	 * well before its confirmedLSN catches up). It is not necessarily
+	 * endpos either: endpos can fall between or inside transactions, and
 	 * replay_lsn has to stay a measurement of applied work.
 	 */
 	if (context->reachedEndPos || !findDurableLSN)
 	{
-		durableLSN = context->previousLSN;
+		durableLSN = context->confirmedLSN;
 	}
 	else
 	{
