@@ -2039,6 +2039,27 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 		}
 
 		/*
+		 * PQsendQueryParams()/PQpipelineSync() only attempt a best-effort,
+		 * non-blocking flush: on a backed-up connection -- exactly what a
+		 * large batch produces, see APPLY_PIPELINE_SYNC_MAX_PENDING_TXNS in
+		 * ld_apply.c -- they can leave the Sync message itself (and
+		 * whatever was queued ahead of it) sitting unsent in libpq's own
+		 * output buffer when the kernel socket buffer is full. Nothing
+		 * else in this loop ever retries that flush, so without this, a
+		 * saturated connection deadlocks: the server has nothing left to
+		 * answer because the Sync message never actually reached it, and
+		 * waiting on read-readiness alone spins forever. PQflush() returns
+		 * 1 while output remains buffered, 0 once it is all on the wire.
+		 */
+		int flushed = PQflush(conn);
+
+		if (flushed < 0)
+		{
+			(void) pgcopy_log_error(pgsql, NULL, "Failed to flush pipeline socket");
+			return false;
+		}
+
+		/*
 		 * PQisBusy will not itself attempt to read data from the server;
 		 * therefore PQconsumeInput must be invoked first, or the busy state
 		 * will never end.
@@ -2105,9 +2126,13 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 
 		/*
 		 * We need to wait for the socket to be ready for reading, otherwise
-		 * select() will return immediately and we will busy loop.
+		 * select() will return immediately and we will busy loop. When
+		 * PQflush() above reported unsent output still buffered, also wait
+		 * for write-readiness so the next iteration's PQflush() can make
+		 * progress draining it (see the comment on that call above).
 		 */
 		fd_set input_mask;
+		fd_set output_mask;
 		struct timeval timeout;
 		struct timeval *timeoutptr = NULL;
 
@@ -2119,7 +2144,18 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 		FD_ZERO(&input_mask);
 		FD_SET(sock, &input_mask);
 
-		int r = select(sock + 1, &input_mask, NULL, NULL, timeoutptr);
+		FD_ZERO(&output_mask);
+
+		if (flushed > 0)
+		{
+			FD_SET(sock, &output_mask);
+		}
+
+		int r = select(sock + 1,
+					   &input_mask,
+					   flushed > 0 ? &output_mask : NULL,
+					   NULL,
+					   timeoutptr);
 
 		if (r == 0 || (r < 0 && errno == EINTR))
 		{
