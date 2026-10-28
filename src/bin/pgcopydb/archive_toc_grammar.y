@@ -137,7 +137,7 @@ static void archiveTocArgListAppend(ArchiveArgList *list, char *item);
  */
 %token <oid> OID
 %token UNKNOWN
-%token AS LANGUAGE_KW SERVER_KW USING ON DOMAIN
+%token AS LANGUAGE_KW SERVER_KW USING ON DOMAIN CAST_KW TRANSFORM_KW
 /*
  * FOR carries its own start-of-keyword position (set in archive_toc_
  * lexer.l, like SPACE's own .pos): NESTED_TRANSFORM's body starts
@@ -579,21 +579,16 @@ entry:
 		}
 
 	/* 3391; 2605 16471 CAST - CAST (toc_fixture.positive_int AS integer)  */
-	| TOP_CAST nspname mark WORD SPACE '(' castSourceType AS castTargetType ')' mark owner
+	| TOP_CAST nspname mark CAST_KW '(' castSourceType AS castTargetType ')' mark owner
 		{
 			/*
-			 * $4 (the repeated "CAST " tag text pg_dump's own labelq
-			 * includes, see dumpCast in pg_dump.c) is a plain WORD,
-			 * not wordname: unlike FUNCTION's own name, it is always
-			 * exactly this one fixed word, never multi-word -- using
-			 * wordname here anyway would make it greedily try to
-			 * extend through the space before "(" as if it might be
-			 * continuing a longer name, which LALR(1) can't walk back
-			 * out of (it would need to see one more token, WORD vs
-			 * '(', before deciding whether to shift that
-			 * space). AS now consumes its own surrounding whitespace
-			 * (see archive_toc_lexer.l's TOCBODY), so no explicit SPACE
-			 * is needed around it here any more.
+			 * CAST_KW matches the repeated "CAST " tag text pg_dump's
+			 * own labelq includes (see dumpCast in pg_dump.c), baking
+			 * in its own trailing separator space the same way AS/FOR/
+			 * LANGUAGE_KW/SERVER_KW/USING/ON do (see archive_toc_
+			 * lexer.l's TOCBODY) -- it is always exactly this one fixed
+			 * word, never multi-word, so no explicit SPACE is needed
+			 * around it here.
 			 */
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -604,23 +599,21 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			item->cast.sourceType = strdup($7);
-			item->cast.targetType = strdup($9);
+			item->cast.sourceType = strdup($6);
+			item->cast.targetType = strdup($8);
 
-			char *body = archiveTocSlice($3, $11);
-			archiveTocBuildSimpleNames(item, body, $12);
+			char *body = archiveTocSlice($3, $10);
+			archiveTocBuildSimpleNames(item, body, $11);
 			free(body);
 
-			free($4.text);
-			free($7);
-			free($9);
-			free($12);
+			free($6);
+			free($8);
+			free($11);
 		}
 
 	/* 3392; 3576 16582 TRANSFORM - TRANSFORM FOR integer LANGUAGE plpgsql  */
-	| TOP_TRANSFORM nspname mark WORD FOR typename LANGUAGE_KW WORD mark owner
+	| TOP_TRANSFORM nspname mark TRANSFORM_KW FOR typename LANGUAGE_KW WORD mark owner
 		{
-			/* $4: same reasoning as TOP_CAST's own $4, above. */
 			item->desc = $1.desc;
 			item->description = $1.text;
 			item->hasNamespace = ($2 != NULL);
@@ -638,7 +631,6 @@ entry:
 			archiveTocBuildSimpleNames(item, body, $10);
 			free(body);
 
-			free($4.text);
 			free($6);
 			free($8.text);
 			free($10);

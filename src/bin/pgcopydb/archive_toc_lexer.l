@@ -287,10 +287,11 @@ const char *archive_toc_token_end;
    * apart from a normal one. Flex's own longest-match rule means these
    * six patterns always win over the generic WORD rule below wherever
    * they apply, so archive_toc_word_or_keyword_token's own classifier
-   * no longer needs (or has) entries for any of them -- DOMAIN is the
-   * only keyword left that genuinely needs post-match recognition,
-   * since it has no surrounding-whitespace convention of its own to
-   * bake into a dedicated pattern.
+   * no longer needs (or has) entries for any of them. CAST_KW below is
+   * the same idea with only a trailing space to bake in (see its own
+   * comment); DOMAIN and TRANSFORM_KW are the two keywords left that
+   * genuinely need post-match recognition instead, since neither has a
+   * whitespace convention of its own to bake into a dedicated pattern.
    */
 " "+"AS"" "+                       { return AS; }
 " "+"FOR"" "+                      { archive_toc_lval.pos = yytext + strspn(yytext, " ");
@@ -299,6 +300,16 @@ const char *archive_toc_token_end;
 " "+"SERVER"" "+                   { return SERVER_KW; }
 " "+"USING"" "+                    { return USING; }
 " "+"ON"" "+                       { return ON; }
+
+  /*
+   * CAST's own repeated tag word (dumpCast's labelq always writes
+   * "CAST (sourcetype AS targettype)" for the remainder, pg_dump.c) --
+   * unlike the six above, nothing ever precedes it with a run of
+   * whitespace of its own (nspname's own WORD/NO_NSPNAME pattern
+   * already consumes the single separator space ahead of it, see
+   * <NAMESPACE> above), so only the trailing space needs baking in.
+   */
+"CAST"" "+                         { return CAST_KW; }
 
 " "+                               { archive_toc_lval.pos = archive_toc_token_end;
                                      return SPACE; }
@@ -580,16 +591,17 @@ archive_toc_begin_nested_tag(void)
 /*
  * archive_toc_word_or_keyword_token classifies a plain (unquoted) run of
  * non-space, non-structural characters matched in TOCBODY/TOCQBODY:
- * either one of the handful of literal keywords CAST/TRANSFORM/USER
- * MAPPING/DEFAULT ACL/an OPERATOR CLASS or FAMILY's ACL/COMMENT form/a
- * relation-owned object type's "ON relname" use as their own fixed
- * separator (AS, FOR, LANGUAGE, SERVER, USING, ON, DOMAIN), or a generic
- * word -- mirrors scan.l's own generic-word-then-classify approach: a
- * real identifier spelled exactly "AS" or "SERVER" would be misread,
- * but every one of these is a reserved SQL keyword, so an unquoted
- * identifier can never actually be exactly one of them; a literal name
- * that needed quoting for this reason would come through TOCQIDENT
- * instead, never reaching this rule at all.
+ * either DOMAIN, or TRANSFORM's own repeated tag word (dumpTransform's
+ * labelq always writes "TRANSFORM FOR typename LANGUAGE langname" for
+ * the remainder, pg_dump.c; FOR's own pattern already bakes in the
+ * separator space ahead of it, see above, so unlike CAST_KW this one
+ * needs no pattern of its own), or a generic word -- mirrors scan.l's
+ * own generic-word-then-classify approach: a real identifier spelled
+ * exactly "DOMAIN" or "TRANSFORM" would be misread, but both are
+ * reserved SQL keywords, so an unquoted identifier can never actually
+ * be exactly one of them; a literal name that needed quoting for this
+ * reason would come through TOCQIDENT instead, never reaching this rule
+ * at all.
  *
  * isLast (true only for the $-anchored twin of this rule, see the file
  * header) distinguishes LASTWORD from plain WORD for the generic case --
@@ -604,7 +616,8 @@ archive_toc_word_or_keyword_token(bool isLast)
 		const char *word;
 		int token;
 	} keywords[] = {
-		{ "DOMAIN", DOMAIN }
+		{ "DOMAIN", DOMAIN },
+		{ "TRANSFORM", TRANSFORM_KW }
 	};
 
 	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++)
