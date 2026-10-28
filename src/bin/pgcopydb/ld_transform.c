@@ -435,7 +435,11 @@ stream_transform_prepare_message(StreamSpecs *specs,
 
 			if (!parsePgoutputMessage(privateContext,
 									  privateContext->outputDB,
-									  (int64_t) output->id))
+									  (int64_t) output->id,
+									  output->jsonBuffer,
+									  output->nspname,
+									  output->relname,
+									  output->old_type))
 			{
 				log_error("Failed to parse pgoutput columns for output id=%lld",
 						  (long long) output->id);
