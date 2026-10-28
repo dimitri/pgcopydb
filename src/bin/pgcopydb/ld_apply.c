@@ -1023,6 +1023,41 @@ done:
 
 
 /*
+ * stream_apply_set_gucs makes sure the session settings of the apply
+ * connection are the given ones, and sends them only when they are not
+ * already.
+ *
+ * They are session level, and sent outside of a transaction block, so that no
+ * rollback takes them back: they only change when the apply moves between the
+ * regular settings and the synchronous ones around endpos.  Sending them with
+ * every transaction made six of the ten statements each one cost.
+ */
+static bool
+stream_apply_set_gucs(StreamApplyContext *context, GUC *settings)
+{
+	PGSQL *applyPgConn = &(context->applyPgConn);
+
+	if (context->appliedGucs == settings &&
+		context->appliedGucsConn != NULL &&
+		context->appliedGucsConn == applyPgConn->connection)
+	{
+		return true;
+	}
+
+	if (!pgsql_set_gucs(applyPgConn, settings))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	context->appliedGucs = settings;
+	context->appliedGucsConn = applyPgConn->connection;
+
+	return true;
+}
+
+
+/*
  * stream_apply_transaction applies a single committed transaction to the
  * target database.  It opens a Postgres transaction, iterates all DML rows
  * for xid in replay order (starting from begin_id), and commits with the
@@ -1045,17 +1080,15 @@ stream_apply_transaction(StreamApplyContext *context,
 	bool sync = (context->endpos != InvalidXLogRecPtr &&
 				 context->endpos <= commitLSN);
 
-	if (!pgsql_begin(applyPgConn))
+	if (!stream_apply_set_gucs(context, sync ? applySettingsSync : applySettings))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (!pgsql_set_gucs(applyPgConn,
-						sync ? applySettingsSync : applySettings))
+	if (!pgsql_begin(applyPgConn))
 	{
 		/* errors have already been logged */
-		(void) pgsql_execute(applyPgConn, "ROLLBACK");
 		return false;
 	}
 
@@ -1072,6 +1105,7 @@ stream_apply_transaction(StreamApplyContext *context,
 	if (!ld_store_iter_replay_txn_init(&iter))
 	{
 		/* errors have already been logged */
+		context->appliedGucs = NULL;
 		(void) pgsql_execute(applyPgConn, "ROLLBACK");
 		context->transactionInProgress = false;
 		return false;
@@ -1152,6 +1186,7 @@ stream_apply_transaction(StreamApplyContext *context,
 				free(pr);
 			}
 
+			context->appliedGucs = NULL;
 			if (!pgsql_execute(applyPgConn, "ROLLBACK"))
 			{
 				/* errors have already been logged */
@@ -1270,6 +1305,7 @@ stream_apply_transaction(StreamApplyContext *context,
 
 	if (!success)
 	{
+		context->appliedGucs = NULL;
 		(void) pgsql_execute(applyPgConn, "ROLLBACK");
 		context->transactionInProgress = false;
 		return false;
@@ -1293,6 +1329,7 @@ stream_apply_transaction(StreamApplyContext *context,
 	{
 		log_error("Failed to setup replication origin for xid %u at %X/%X",
 				  xid, LSN_FORMAT_ARGS(commitLSN));
+		context->appliedGucs = NULL;
 		(void) pgsql_execute(applyPgConn, "ROLLBACK");
 		context->transactionInProgress = false;
 		return false;

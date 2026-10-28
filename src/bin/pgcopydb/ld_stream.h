@@ -567,6 +567,10 @@ typedef struct StreamApplyContext
 	/* target connection created in pipeline mode responsible for apply */
 	PGSQL applyPgConn;
 
+	/* the session settings last sent on applyPgConn, see stream_apply_set_gucs */
+	GUC *appliedGucs;
+	PGconn *appliedGucsConn;
+
 	/* apply needs access to the catalogs to register sentinel replay_lsn */
 	DatabaseCatalog *sourceDB;
 	DatabaseCatalog *replayDB;
