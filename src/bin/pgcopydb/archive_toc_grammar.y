@@ -2,29 +2,25 @@
 /*
  * src/bin/pgcopydb/archive_toc_grammar.y
  *     bison grammar for a whole pg_restore --list line, tokenized by
- *     archive_toc_lexer.l. Replaces the previous revision's hand-written
- *     recursive-descent dispatch (a shape table plus per-shape C
- *     functions in archive_toc_parser.c, splitting already-matched text
- *     with strchr()/strstr()): every production below writes directly
- *     into the ArchiveContentItem passed in as %parse-param, so there is
- *     no intermediate opaque string for any C code to re-split.
+ *     archive_toc_lexer.l: every production below writes directly into
+ *     the ArchiveContentItem passed in as %parse-param, so there is no
+ *     intermediate opaque string for any C code to re-split.
  *
- * The grammar mirrors the dispatch the previous archiveTocShapeTable and
- * parseAclOrCommentRemainder's switch encoded: a handful of distinct
- * "shapes" (SIMPLE's plain "namespace name owner", RELATION's
- * "namespace relname name owner", a function-like's own balanced
- * argument list, CAST's "(source AS target)", ...), each with its own
- * token (see archive_toc_lexer.l's TOP_ and NESTED_ token groups) rather
- * than a runtime switch on ArchiveItemDesc -- bison's own generated
- * parse table does that dispatch now, not a C function.
+ * A handful of distinct remainder shapes (SIMPLE's plain "namespace
+ * name owner", RELATION's "namespace relname name owner", a
+ * function-like's own balanced argument list, CAST's "(source AS
+ * target)", ...), each with its own token (see archive_toc_lexer.l's
+ * TOP_ and NESTED_ token groups), drive bison's own generated parse
+ * table -- there is no runtime switch on ArchiveItemDesc anywhere in
+ * this file.
  *
  * Only one thing stays genuinely a C-level decision rather than a
- * grammar one: WHICH shape a given ArchiveItemDesc maps to is still a
- * lookup (archive_toc_tag_token, archive_toc_lexer.l), because dozens of
- * unrelated tags share the exact same shape (TYPE, DOMAIN, LANGUAGE, ...
- * all parse identically) -- that's not an ambiguity a grammar should
- * resolve, it's recognizing genuinely identical rules and not repeating
- * them 39 times over.
+ * grammar one: WHICH of these shapes a given ArchiveItemDesc maps to
+ * is still a lookup (archive_toc_tag_token, archive_toc_lexer.l),
+ * because dozens of unrelated tags share the exact same shape (TYPE,
+ * DOMAIN, LANGUAGE, ... all parse identically) -- that's not an
+ * ambiguity a grammar should resolve, it's recognizing genuinely
+ * identical rules and not repeating them 39 times over.
  */
 
 #include <stdlib.h>
@@ -300,9 +296,9 @@ wordname:
 	;
 
 /*
- * relname and name are for a field the previous revision kept
- * as raw, unsplit text (no fmtId() quoting, no escaping convention at
- * all -- see TOCBODY's own file-header comment): rather than enumerate
+ * relname and name are for a field kept as raw, unsplit text (no
+ * fmtId() quoting, no escaping convention at all -- see TOCBODY's own
+ * file-header comment): rather than enumerate
  * every WORD/DOT/COMMA/LPAREN/RPAREN combination such a field could
  * contain (a losing game -- CI's own "Sp1eCial .Char" schema name,
  * space then dot then more text, is exactly the kind of combination
@@ -430,7 +426,6 @@ entry:
 			item->desc = $1.desc;
 			item->description = $1.text;
 			item->isCompositeTag = true;
-			item->shape = ARCHIVE_SHAPE_ACL_OR_COMMENT;
 			item->tagKind = ARCHIVE_TAG_KIND_ACL;
 			item->hasNamespace = ($2 != NULL);
 
@@ -448,7 +443,6 @@ entry:
 			item->desc = $1.desc;
 			item->description = $1.text;
 			item->isCompositeTag = true;
-			item->shape = ARCHIVE_SHAPE_ACL_OR_COMMENT;
 			item->tagKind = ARCHIVE_TAG_KIND_COMMENT;
 			item->hasNamespace = ($2 != NULL);
 
@@ -466,7 +460,6 @@ entry:
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
-			item->shape = ARCHIVE_SHAPE_SIMPLE;
 			item->hasNamespace = ($2 != NULL);
 
 			if ($2 != NULL)
@@ -485,7 +478,6 @@ entry:
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
-			item->shape = ARCHIVE_SHAPE_RELATION;
 			item->hasNamespace = ($2 != NULL);
 
 			if ($2 != NULL)
@@ -504,9 +496,8 @@ entry:
 			 *
 			 * archiveTocBuildRelationNames's own restoreListName (the
 			 * owning relation's name only) is the right contract for a
-			 * NESTED ACL/COMMENT entry (see finishRelationAclOrComment's
-			 * old rationale -- filtering matches the RELATION, not the
-			 * ACL/COMMENT itself), but NOT for this top-level entry,
+			 * NESTED ACL/COMMENT entry (filtering matches the RELATION,
+			 * not the ACL/COMMENT itself), but NOT for this top-level entry,
 			 * which has no separate "owning relation" at all: relname
 			 * and name here are both just this ONE entry's own fields
 			 * (e.g. DEFAULT's own column name), so restoreListName
@@ -530,7 +521,6 @@ entry:
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
-			item->shape = ARCHIVE_SHAPE_SIMPLE;
 			item->hasNamespace = ($2 != NULL);
 
 			if ($2 != NULL)
@@ -557,9 +547,8 @@ entry:
 
 			/*
 			 * item->name stays narrowed to the bare function name
-			 * ($4.text, matching the previous revision's own
-			 * splitPlainFunctionSignature contract), but restoreListName
-			 * keeps the FULL verbatim text, signature included --
+			 * ($4.text), but restoreListName keeps the FULL verbatim
+			 * text, signature included --
 			 * every other top-level shape's own raw-remainder-preserved
 			 * behavior, overridden here since archiveTocBuildSimpleNames
 			 * would otherwise build it from the already-narrowed name.
@@ -576,7 +565,6 @@ entry:
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
-			item->shape = ARCHIVE_SHAPE_SIMPLE;
 			item->hasNamespace = ($2 != NULL);
 
 			if ($2 != NULL)
@@ -608,7 +596,6 @@ entry:
 			 */
 			item->desc = $1.desc;
 			item->description = $1.text;
-			item->shape = ARCHIVE_SHAPE_OPAQUE;
 			item->hasNamespace = ($2 != NULL);
 
 			if ($2 != NULL)
@@ -635,7 +622,6 @@ entry:
 			/* $4: same reasoning as TOP_CAST's own $4, above. */
 			item->desc = $1.desc;
 			item->description = $1.text;
-			item->shape = ARCHIVE_SHAPE_OPAQUE;
 			item->hasNamespace = ($2 != NULL);
 
 			if ($2 != NULL)
@@ -662,7 +648,6 @@ entry:
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
-			item->shape = ARCHIVE_SHAPE_OPAQUE;
 			item->hasNamespace = ($2 != NULL);
 
 			if ($2 != NULL)
@@ -691,7 +676,6 @@ entry:
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
-			item->shape = ARCHIVE_SHAPE_OPAQUE;
 			item->hasNamespace = ($2 != NULL);
 
 			if ($2 != NULL)
@@ -882,10 +866,9 @@ nested_entry:
 
 			/*
 			 * item->name/restoreListName use the NARROWED name, sliced
-			 * verbatim from before "USING amname" (matching the
-			 * previous revision's own splitOperatorClassFamilyUsing
-			 * contract) -- only useListRemainder reproduces the FULL
-			 * verbatim text, "USING amname" included.
+			 * verbatim from before "USING amname" -- only
+			 * useListRemainder reproduces the FULL verbatim text,
+			 * "USING amname" included.
 			 */
 			char *opclassName = archiveTocSlice($3, $4);
 
@@ -950,14 +933,13 @@ nested_entry:
 
 /*
  * archive_toc_error is bison's own error hook: a shape this grammar
- * doesn't recognize (or genuinely malformed input) is not fatal here
- * either -- the same "we don't support this one yet, the caller's raw-
- * text fallback stands" convention the previous hand-written parser
- * followed throughout (e.g. a domain's own CONSTRAINT, excluded on
- * purpose: "CONSTRAINT name ON DOMAIN domain" is a real shape pg_dump
- * can produce that this grammar doesn't structure, the same as before).
- * archive_toc_parse_line (archive_toc_parser.c) checks archive_toc_
- * parse()'s own return value and falls back there, so this only logs.
+ * doesn't recognize (or genuinely malformed input) is not fatal here --
+ * "we don't support this one yet, the caller's raw-text fallback
+ * stands" (e.g. a domain's own CONSTRAINT, excluded on purpose:
+ * "CONSTRAINT name ON DOMAIN domain" is a real shape pg_dump can
+ * produce that this grammar doesn't structure). archive_toc_parse_line
+ * (archive_toc_parser.c) checks archive_toc_parse()'s own return value
+ * and falls back there, so this only logs.
  */
 void
 archive_toc_error(ArchiveContentItem *item, const char *msg)
@@ -1142,11 +1124,11 @@ archiveTocArgListAppend(ArchiveArgList *list, char *item)
  * or RELATION-shaped top-level entry or a nested ACL/COMMENT object type
  * whose own identifier has no further structure worth splitting (a
  * relation's own name, a function/operator's own name, ...).
- * archiveTocBuildOpaqueNames is their OPAQUE-shaped counterpart, used
- * when `body` is the WHOLE remaining text rather than already-split
- * fields (a nested CAST/TRANSFORM/OPERATOR CLASS or FAMILY's own
- * remainder, or anything else this grammar doesn't structure further) --
- * mirroring the previous revision's buildOpaqueAclOrCommentNames.
+ * archiveTocBuildOpaqueNames is their counterpart for an irregular
+ * shape, used when `body` is the WHOLE remaining text rather than
+ * already-split fields (a nested CAST/TRANSFORM/OPERATOR CLASS or
+ * FAMILY's own remainder, or anything else this grammar doesn't
+ * structure further).
  */
 static void
 archiveTocBuildSimpleNames(ArchiveContentItem *item, const char *name,
@@ -1232,8 +1214,7 @@ archiveTocBuildOpaqueNames(ArchiveContentItem *item, const char *rlNamespace,
  * comment for why this is a byte-exact copy of the original line, not a
  * reassembly from already-split pieces (a quoted identifier round-trips
  * with its original quoting this way, with no separate re-quoting step
- * needed, unlike the previous revision's own quoteIdentForUseList).
- * When owner is empty, the trailing "%s" contributes nothing but its
+ * needed). When owner is empty, the trailing "%s" contributes nothing but its
  * own leading space, matching pg_restore's own convention of always
  * writing that one separating space even for an empty owner field.
  */
@@ -1276,8 +1257,8 @@ archiveTocBuildUseListRemainder(ArchiveContentItem *item,
  * verbatim between two marks -- for the handful of top-level shapes
  * whose own item->name is deliberately narrower than their restore
  * ListName ought to be: FUNCTION/PROCEDURE/AGGREGATE's own bare name
- * (signature stripped, see splitPlainFunctionSignature's old contract)
- * and RELATION's own relname (the second field, name, stripped) --
+ * (signature stripped) and RELATION's own relname (the second field,
+ * name, stripped) --
  * restoreListName, unlike item->name, has no such narrowing contract
  * for a top-level entry: every other top-level shape's own raw-
  * remainder-preserved restoreListName already includes everything, and

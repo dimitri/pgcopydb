@@ -138,53 +138,6 @@ typedef enum
  */
 
 /*
- * ArchiveTocShape classifies how an entry's remainder (everything after
- * the TAG token) is laid out, so the parser knows how many fields to split
- * it into and what each one means. See tests/toc-coverage/ for real
- * captured examples of each shape.
- */
-typedef enum
-{
-	ARCHIVE_SHAPE_UNKNOWN = 0,
-
-	/*
-	 * "<namespace> <name> <owner>" -- namespace is "-" for a global
-	 * (non-schema-owned) object. Covers both: SCHEMA's own "- name owner"
-	 * (name is the schema's own name) and schema-owned entries like
-	 * TABLE, FUNCTION, SEQUENCE, VIEW, ... ("schema name owner").
-	 */
-	ARCHIVE_SHAPE_SIMPLE,
-
-	/*
-	 * "<namespace> <relname> <name> <owner>" -- an object that belongs to
-	 * a relation (or, for the two PUBLICATION tags below, a publication):
-	 * CONSTRAINT, FK_CONSTRAINT, TRIGGER, RULE, POLICY, DEFAULT (name is
-	 * the column name here, not an object with its own identity),
-	 * PUBLICATION_TABLE (relname is the publication name, name is the
-	 * published table), PUBLICATION_TABLES_IN_SCHEMA (relname is the
-	 * publication name, name is the published schema).
-	 */
-	ARCHIVE_SHAPE_RELATION,
-
-	/*
-	 * ACL or COMMENT: "<namespace> <objectType> ...", recursing into one
-	 * of the shapes above (picked by objectType, not by the outer
-	 * ACL/COMMENT tag) for the remainder after it.
-	 */
-	ARCHIVE_SHAPE_ACL_OR_COMMENT,
-
-	/*
-	 * Genuinely irregular one-off shapes, not worth generalizing: CAST
-	 * ("CAST (domain AS type)"), USER_MAPPING ("USER MAPPING user SERVER
-	 * server", repeating its own tag name), DEFAULT_ACL ("DEFAULT
-	 * PRIVILEGES FOR TABLES"). The whole remainder up to the trailing
-	 * owner (if any) is kept as-is in `name`.
-	 */
-	ARCHIVE_SHAPE_OPAQUE
-} ArchiveTocShape;
-
-
-/*
  * Naming note, for anyone cross-referencing with pg_dump's own source
  * (pg_backup_archiver.h's TocEntry, pg_dump.c's dumpACL/dumpCommentExtended):
  * pg_dump's te->desc is the category string ("ACL", "TABLE", "COMMENT", ...)
@@ -200,9 +153,7 @@ typedef enum
  * ObjectType enum and its objtype field in CommentStmt, SecLabelStmt and
  * GrantStmt -- the parse-tree representation of exactly the statements
  * (COMMENT ON, SECURITY LABEL, GRANT/REVOKE) these archive entries are the
- * already-executed result of. "shape" below has no such precedent -- it's
- * this parser's own invention, not something pg_dump or the backend already
- * names and we failed to reuse.
+ * already-executed result of.
  */
 typedef struct ArchiveContentItem
 {
@@ -220,26 +171,24 @@ typedef struct ArchiveContentItem
 	ArchiveCompositeTagType tagType;
 
 	/*
-	 * Structured fields, split out of restoreListName according to
-	 * ArchiveTocShape -- see archive_toc_parser.c. Empty ("") rather than
-	 * NULL when not applicable to this entry's shape, so callers can
-	 * always safely read them.
+	 * Structured fields, split out of the entry's own remainder text by
+	 * archive_toc_grammar.y's own productions. Empty ("") rather than NULL
+	 * when not applicable to this entry's tag, so callers can always
+	 * safely read them.
 	 */
-	ArchiveTocShape shape;
-
 	bool hasNamespace;              /* false when the namespace field is "-" */
 	char nspname[PG_NAMEDATALEN];
-	char relname[PG_NAMEDATALEN];   /* owning relation/publication, SHAPE_RELATION only */
+	char relname[PG_NAMEDATALEN];   /* owning relation/publication, relation-shaped tags only */
 	char name[PG_NAMEDATALEN];      /* the object's own name (or column name for DEFAULT) */
 	char owner[PG_NAMEDATALEN];     /* role name; may be empty, never NULL */
 
 	/*
-	 * Set when shape == ARCHIVE_SHAPE_ACL_OR_COMMENT: objectType is the
-	 * SQL object type this ACL/COMMENT is attached to (e.g.
-	 * ARCHIVE_TAG_COLUMN, ARCHIVE_TAG_TRIGGER, ...; see the naming note
-	 * above), and hasNamespace/nspname/relname/name/owner above describe
-	 * its own remainder, parsed per its own shape, not the outer
-	 * ACL/COMMENT tag.
+	 * Set when isCompositeTag is true (an ACL or COMMENT entry):
+	 * objectType is the SQL object type this ACL/COMMENT is attached to
+	 * (e.g. ARCHIVE_TAG_COLUMN, ARCHIVE_TAG_TRIGGER, ...; see the naming
+	 * note above), and hasNamespace/nspname/relname/name/owner above
+	 * describe its own remainder, parsed per its own object type, not the
+	 * outer ACL/COMMENT tag.
 	 */
 	ArchiveItemDesc objectType;
 	char *objectTypeText;        /* malloc'ed area; objectType's own raw
@@ -248,28 +197,26 @@ typedef struct ArchiveContentItem
 	                              * tag's */
 
 	/*
-	 * Set when shape == ARCHIVE_SHAPE_ACL_OR_COMMENT: the full original
-	 * remainder text, object type included, exactly as pg_restore --list
-	 * would print it (e.g. "toc_fixture COLUMN parent.name postgres").
-	 * Distinct from restoreListName on purpose: that field deliberately
-	 * holds only the *relation's* own name for filtering (see
-	 * finishRelationAclOrComment in archive_toc_parser.c), not a faithful
-	 * reproduction of this entry's own line -- useListRemainder is the
-	 * latter, for callers (e.g. --use-list) that need to write the line
-	 * back out.
+	 * Set when isCompositeTag is true (an ACL or COMMENT entry): the full
+	 * original remainder text, object type included, exactly as
+	 * pg_restore --list would print it (e.g. "toc_fixture COLUMN
+	 * parent.name postgres"). Distinct from restoreListName on purpose:
+	 * that field deliberately holds only the *relation's* own name for
+	 * filtering, not a faithful reproduction of this entry's own line --
+	 * useListRemainder is the latter, for callers (e.g. --use-list) that
+	 * need to write the line back out.
 	 */
 	char *useListRemainder;      /* malloc'ed area */
 
 	/*
 	 * Set when objectType (above) is FUNCTION, PROCEDURE or AGGREGATE, OR
-	 * (Phase 4, see archive_toc_parser.c's splitPlainFunctionSignature)
 	 * when desc itself is one of those three for a plain, non-ACL/COMMENT
 	 * entry: the raw text pg_dump wrote between name's own parentheses,
 	 * and that same text split on its top-level commas (a nested pair
 	 * from a type's own typmod, e.g. "numeric(10,2)", isn't a boundary)
-	 * into one string per argument -- see archive_toc_parser.c's
-	 * splitFunctionArgs. Each argument is kept verbatim, but the two
-	 * cases differ in content, not shape: the ACL/COMMENT case uses
+	 * into one string per argument -- see archive_toc_grammar.y's own
+	 * `args`/`arglist`. Each argument is kept verbatim, but the two cases
+	 * differ in content, not shape: the ACL/COMMENT case uses
 	 * pg_get_function_identity_arguments() ("[argmode] [argname]
 	 * argtype", what dumpComment/dumpACL use), while the plain-entry case
 	 * uses format_function_signature()/format_aggregate_signature()
@@ -299,16 +246,15 @@ typedef struct ArchiveContentItem
 	char *operatorRightArg;      /* malloc'ed area */
 
 	/*
-	 * Phase 4: a handful of other tags whose remainder, while irregular
-	 * enough overall to stay ARCHIVE_SHAPE_OPAQUE/SIMPLE for the generic
-	 * nspname/name/owner split, still has its own fully regular internal
-	 * structure worth splitting out too -- same "overlapping fields"
-	 * principle as signatureArgsText/operatorLeftArg above: name/
-	 * restoreListName keep their existing, narrower contract, these are
-	 * purely additional. Each applies both to the tag's own plain,
-	 * top-level entry and (where pg_dump supports a COMMENT on it) its
-	 * ACL/COMMENT-wrapped one -- see archive_toc_parser.c's
-	 * applyTopLevelSignatureExtras and parseAclOrCommentRemainder.
+	 * A handful of other tags whose remainder, while irregular enough
+	 * overall to stay on the generic nspname/name/owner split, still has
+	 * its own fully regular internal structure worth splitting out too --
+	 * same "overlapping fields" principle as signatureArgsText/
+	 * operatorLeftArg above: name/restoreListName keep their existing,
+	 * narrower contract, these are purely additional. Each applies both
+	 * to the tag's own plain, top-level entry and (where pg_dump supports
+	 * a COMMENT on it) its ACL/COMMENT-wrapped one -- see
+	 * archive_toc_grammar.y's own TOP_CAST/NESTED_CAST and similar pairs.
 	 */
 
 	/*

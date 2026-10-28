@@ -2424,10 +2424,10 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 	/*
 	 * "functions/casts/transforms with parameters of this type": item->name
 	 * holds the whole opaque signature text for a top-level CAST/USER
-	 * MAPPING/DEFAULT ACL/TRANSFORM entry still (see archive_toc_parser.c's
-	 * ARCHIVE_SHAPE_OPAQUE and applyTopLevelSignatureExtras -- those don't
-	 * narrow item->name itself, only add further fields alongside it); for
-	 * FUNCTION/PROCEDURE/AGGREGATE (either the plain entry or its ACL/
+	 * MAPPING/DEFAULT ACL/TRANSFORM entry still (archive_toc_grammar.y's
+	 * TOP_CAST/TOP_USER_MAPPING/TOP_DEFAULT_ACL/TOP_TRANSFORM productions
+	 * don't narrow item->name itself, only add further fields alongside
+	 * it); for FUNCTION/PROCEDURE/AGGREGATE (either the plain entry or its ACL/
 	 * COMMENT), the signature is split out instead -- item->
 	 * signatureArgsText -- and for OPERATOR, item->operatorLeftArg/
 	 * RightArg, for CAST/TRANSFORM, item->castSourceType/TargetType and
@@ -2491,10 +2491,9 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 			json_object_set_string(jsobj, "owner", item->owner);
 
 			/*
-			 * FUNCTION/PROCEDURE/AGGREGATE (ACL/COMMENT only, see
-			 * archive_toc_parser.c's finishFunctionLikeAclOrComment):
-			 * the raw argument-list text, and that same text split on
-			 * its own top-level commas.
+			 * FUNCTION/PROCEDURE/AGGREGATE (either the plain entry or its
+			 * ACL/COMMENT): the raw argument-list text, and that same
+			 * text split on its own top-level commas.
 			 */
 			if (item->signatureArgsText != NULL)
 			{
@@ -2512,9 +2511,9 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 			}
 
 			/*
-			 * OPERATOR (ACL/COMMENT only, see finishOperatorAclOrComment):
-			 * the left/right operand type, empty when that side is NONE
-			 * (a prefix or postfix operator missing it).
+			 * OPERATOR (ACL/COMMENT only): the left/right operand type,
+			 * empty when that side is NONE (a prefix or postfix operator
+			 * missing it).
 			 */
 			if (item->operatorHasLeftArg || item->operatorHasRightArg)
 			{
@@ -2527,9 +2526,9 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 			}
 
 			/*
-			 * Phase 4 "overlapping fields" (see pgcmd.h): CAST, USER
-			 * MAPPING, DEFAULT ACL, TRANSFORM, and an OPERATOR CLASS/
-			 * FAMILY ACL/COMMENT's own access method.
+			 * The "overlapping fields" (see pgcmd.h): CAST, USER MAPPING,
+			 * DEFAULT ACL, TRANSFORM, and an OPERATOR CLASS/FAMILY
+			 * ACL/COMMENT's own access method.
 			 */
 			if (item->castSourceType != NULL)
 			{
