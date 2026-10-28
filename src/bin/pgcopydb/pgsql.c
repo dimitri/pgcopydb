@@ -5359,6 +5359,39 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 			FD_ZERO(&input_mask);
 			FD_SET(PQsocket(conn), &input_mask);
 
+			/*
+			 * The buffer ran out, which is not the same as the stream going
+			 * quiet: a server that sends faster than we process has the next
+			 * bytes waiting in the socket already.  Take them before calling
+			 * the stream idle.
+			 */
+			struct timeval noWait = { 0, 0 };
+
+			if (select(PQsocket(conn) + 1, &input_mask, NULL, NULL, &noWait) > 0)
+			{
+				if (PQconsumeInput(conn) == 0)
+				{
+					(void) pgsql_stream_log_error(
+						pgsql,
+						NULL,
+						"could not receive data from WAL stream");
+					goto error;
+				}
+
+				continue;
+			}
+
+			/* nothing left to process: a good time to make it durable */
+			if (client->idleFunction != NULL &&
+				!(*client->idleFunction)(context))
+			{
+				/* errors have already been logged */
+				goto error;
+			}
+
+			FD_ZERO(&input_mask);
+			FD_SET(PQsocket(conn), &input_mask);
+
 			/* Compute when we need to wakeup to send a keepalive message. */
 			if (client->standby_message_timeout)
 			{

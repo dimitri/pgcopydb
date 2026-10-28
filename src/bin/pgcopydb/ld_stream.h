@@ -417,6 +417,10 @@ typedef struct StreamContext
 
 	uint64_t lastWriteTime;
 
+	/* messages written to output.db since the last commit, see streamBeginOutput */
+	int outputPendingMessages;
+	TimestampTz outputBatchStartTime;
+
 	/* transform needs some catalog lookups (pkey, type oid) */
 	DatabaseCatalog *sourceDB;
 	DatabaseCatalog *outputDB;   /* output.db — receive writes, apply reads */
@@ -483,6 +487,15 @@ typedef struct StreamContext
 	 * call and exits cleanly without advancing transform_lsn to endpos.
 	 */
 	bool midTxnEndpos;
+
+	/*
+	 * The COMMIT LSN of the transaction the transform hook has just written
+	 * to replayDB, InvalidXLogRecPtr when what it wrote was a marker or a
+	 * rolled back transaction.  Cleared before each ld_store_iter_output
+	 * call, so that stream_transform_from_outputdb can tell the two apart and
+	 * carry on with the next transaction.
+	 */
+	uint64_t transformedCommitLSN;
 
 	/*
 	 * Cursor over the KEEPALIVE and SWITCH rows of outputDB, set by
@@ -745,6 +758,7 @@ bool streamCheckResumePosition(StreamSpecs *specs);
 bool streamWrite(LogicalStreamContext *context);
 bool streamFlush(LogicalStreamContext *context);
 bool streamKeepalive(LogicalStreamContext *context);
+bool streamIdle(LogicalStreamContext *context);
 bool streamClose(LogicalStreamContext *context);
 bool streamFeedback(LogicalStreamContext *context);
 

@@ -1544,6 +1544,40 @@ catalog_init(DatabaseCatalog *catalog)
 		return false;
 	}
 
+	/*
+	 * The CDC spools, output.db and replay.db, hold copies of changes that
+	 * the source still has: the slot is only advanced to what apply has
+	 * committed on the target (see stream_sync_sentinel), and restarts from
+	 * there.  What an operating system crash takes from their last commits is
+	 * received again, so they can skip the fsync of every commit, which is
+	 * what synchronous = NORMAL does in WAL mode.  The files are not at risk
+	 * of corruption either way.
+	 */
+	if (catalog->type == DATABASE_CATALOG_TYPE_OUTPUT ||
+		catalog->type == DATABASE_CATALOG_TYPE_REPLAY)
+	{
+		/*
+		 * The pragmas read the schema, which fails with SQLITE_BUSY when
+		 * another process is closing the file (the last connection
+		 * checkpoints the WAL and removes it) or creating it: wait for it.
+		 */
+		sqlite3_busy_timeout(catalog->db, CATALOG_OPEN_BUSY_TIMEOUT_MS);
+
+		bool pragmasOk =
+			catalog_execute(catalog, "PRAGMA synchronous = NORMAL") &&
+			catalog_execute(catalog, "PRAGMA wal_autocheckpoint = 16384");
+
+		sqlite3_busy_timeout(catalog->db, 0);
+
+		if (!pragmasOk)
+		{
+			/* errors have already been logged */
+			sqlite3_close(catalog->db);
+			catalog->db = NULL;
+			return false;
+		}
+	}
+
 	if (createSchema)
 	{
 		/*
@@ -2031,6 +2065,17 @@ catalog_begin(DatabaseCatalog *catalog, bool immediate)
 	}
 
 	return true;
+}
+
+
+/*
+ * catalog_in_transaction returns true when a transaction opened with
+ * catalog_begin is still open on the catalog.
+ */
+bool
+catalog_in_transaction(DatabaseCatalog *catalog)
+{
+	return catalog->db != NULL && sqlite3_get_autocommit(catalog->db) == 0;
 }
 
 

@@ -129,6 +129,25 @@
 #define CATCHINGUP_SLEEP_MS 1 * 1000 /* 1s */
 #define STREAM_EMPTY_TX_TIMEOUT 10   /* seconds */
 
+/*
+ * Receive commits to output.db in groups (see streamCommitOutput): when the
+ * stream runs dry, and otherwise after this many messages or this long since
+ * the first one, whichever comes first.  The time bound keeps the apply
+ * process fed while the source never goes quiet; the message bound keeps the
+ * SQLite transaction of a very large source transaction from growing without
+ * limit.
+ */
+#define STREAM_OUTPUT_BATCH_MAX_MESSAGES 10000
+#define STREAM_OUTPUT_BATCH_MAX_AGE_MS 50
+
+/*
+ * Transform runs in passes (see stream_transform_from_outputdb): each pass
+ * writes up to this many transactions to replay.db in one SQLite transaction.
+ * The apply process looks for the next transaction to run among those still
+ * to do, so the bound also keeps that lookup short.
+ */
+#define STREAM_TRANSFORM_BATCH_MAX_TXNS 256
+
 /* internal default for allocating strings  */
 #define BUFSIZE 1024
 

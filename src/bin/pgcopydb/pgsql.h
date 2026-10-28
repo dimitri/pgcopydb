@@ -546,6 +546,9 @@ typedef struct LogicalStreamClient
 	LogicalStreamReceiver feedbackFunction;
 	LogicalStreamReceiver keepaliveFunction;
 
+	/* called when there is no message to read, before waiting for the next */
+	LogicalStreamReceiver idleFunction;
+
 	int fsync_interval;
 	int standby_message_timeout;
 } LogicalStreamClient;

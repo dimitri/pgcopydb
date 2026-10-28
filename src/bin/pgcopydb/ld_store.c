@@ -1755,7 +1755,7 @@ ld_store_insert_message(DatabaseCatalog *catalog,
 
 	SQLiteQuery query = { 0 };
 
-	if (!catalog_sql_prepare(db, sql, &query))
+	if (!catalog_sql_prepare_cached(catalog, sql, &query))
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(&(catalog->sema));
@@ -1838,7 +1838,7 @@ ld_store_insert_pgoutput_message(DatabaseCatalog *catalog,
 		"  values($1, $2, $3, $4, $5, $6, $7, $8)";
 
 	SQLiteQuery oq = { 0 };
-	if (!catalog_sql_prepare(db, output_sql, &oq))
+	if (!catalog_sql_prepare_cached(catalog, output_sql, &oq))
 	{
 		(void) semaphore_unlock(&(catalog->sema));
 		return false;
@@ -1908,7 +1908,7 @@ ld_store_insert_pgoutput_message(DatabaseCatalog *catalog,
 			PgoutputColumn *_c = &(cols_arr)[_i]; \
 			char _st[2] = { _c->status, '\0' }; \
 			SQLiteQuery _cq = { 0 }; \
-			if (!catalog_sql_prepare(db, col_sql, &_cq)) \
+			if (!catalog_sql_prepare_cached(catalog, col_sql, &_cq)) \
 			{ \
 				(void) semaphore_unlock(&(catalog->sema)); \
 				return false; \
@@ -1980,7 +1980,7 @@ ld_store_insert_internal_message(DatabaseCatalog *catalog,
 
 	SQLiteQuery query = { 0 };
 
-	if (!catalog_sql_prepare(db, sql, &query))
+	if (!catalog_sql_prepare_cached(catalog, sql, &query))
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(&(catalog->sema));
@@ -2141,7 +2141,7 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 
 		SQLiteQuery query = { 0 };
 
-		if (!catalog_sql_prepare(db, sql, &query))
+		if (!catalog_sql_prepare_cached(catalog, sql, &query))
 		{
 			/* errors have already been logged */
 			(void) semaphore_unlock(&(catalog->sema));
@@ -2179,7 +2179,7 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 
 	SQLiteQuery query = { 0 };
 
-	if (!catalog_sql_prepare(db, sql, &query))
+	if (!catalog_sql_prepare_cached(catalog, sql, &query))
 	{
 		/* errors have already been logged */
 		(void) semaphore_unlock(&(catalog->sema));
@@ -2275,6 +2275,12 @@ ld_store_insert_replay_stmt(DatabaseCatalog *catalog,
 
 /*
  * ld_store_iter_output iterates over the output table of the replayDB.
+ *
+ * It reads without the catalog semaphore, which serializes writers: the file
+ * is in WAL mode, so a reader does not wait for receive and receive does not
+ * wait for it.  What the reads see together is up to the caller: a read
+ * transaction around several calls gives them one snapshot (see
+ * stream_transform_from_outputdb).
  */
 bool
 ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
@@ -2295,20 +2301,9 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 	iter->endpos = specs->endpos;
 
 
-	DatabaseCatalog *catalog = iter->catalog;
-
-
-	if (!semaphore_lock(&(catalog->sema)))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-
 	if (!ld_store_iter_output_init(iter))
 	{
 		/* errors have already been logged */
-		(void) semaphore_unlock(&(catalog->sema));
 		return false;
 	}
 
@@ -2319,8 +2314,6 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 	if (iter->output == NULL ||
 		iter->output->action == STREAM_ACTION_UNKNOWN)
 	{
-		(void) semaphore_unlock(&(catalog->sema));
-
 		if (iter->pending_xid != 0)
 		{
 			/*
@@ -2418,18 +2411,15 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 		{
 			log_error("Failed to iterate over CDC output messages, "
 					  "see above for details");
-			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 
 		if (!ld_store_iter_output_finish(iter))
 		{
 			/* errors have already been logged */
-			(void) semaphore_unlock(&(catalog->sema));
 			return false;
 		}
 
-		(void) semaphore_unlock(&(catalog->sema));
 
 		return true;
 	}
@@ -2441,7 +2431,6 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 			if (!ld_store_iter_output_next(iter))
 			{
 				/* errors have already been logged */
-				(void) semaphore_unlock(&(catalog->sema));
 				return false;
 			}
 
@@ -2452,7 +2441,6 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 				if (!ld_store_iter_output_finish(iter))
 				{
 					/* errors have already been logged */
-					(void) semaphore_unlock(&(catalog->sema));
 					return false;
 				}
 
@@ -2466,7 +2454,6 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 			{
 				log_error("Failed to iterate over CDC output messages, "
 						  "see above for details");
-				(void) semaphore_unlock(&(catalog->sema));
 				return false;
 			}
 
@@ -2475,7 +2462,6 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 				if (!ld_store_iter_output_finish(iter))
 				{
 					/* errors have already been logged */
-					(void) semaphore_unlock(&(catalog->sema));
 					return false;
 				}
 				break;
@@ -2483,7 +2469,6 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 		}
 	}
 
-	(void) semaphore_unlock(&(catalog->sema));
 
 	return true;
 }

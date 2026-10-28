@@ -470,7 +470,13 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				goto done;
 			}
 
-			if (specs->private.midTxnEndpos)
+			/*
+			 * A pass can hand over complete transactions and then meet the
+			 * open one that endpos falls in: apply those first, the next
+			 * pass finds the open one again with nothing before it.
+			 */
+			if (specs->private.midTxnEndpos &&
+				!stream_apply_state_progressed(&before, &current))
 			{
 				log_notice("Apply: inline transform detected mid-transaction "
 						   "endpos — endpos %X/%X fell inside an uncommitted "
