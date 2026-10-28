@@ -176,6 +176,13 @@ ld_store_open_replaydb(StreamSpecs *specs)
 		return false;
 	}
 
+	/* a file from an earlier version may lack the indexes the queries name */
+	if (!createReplayDB && !catalog_create_indexes(replayDB))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	return true;
 }
 
@@ -582,6 +589,36 @@ ld_store_lookup_output_at_lsn(DatabaseCatalog *catalog, uint64_t lsn,
 
 
 /*
+ * ld_store_lookup_output_one runs a query that returns at most one row of the
+ * output table, with the usual columns, and fetches it into output: left
+ * zeroed (its lsn is InvalidXLogRecPtr) when there is none.
+ */
+static bool
+ld_store_lookup_output_one(DatabaseCatalog *catalog,
+						   const char *sql,
+						   BindParam *params,
+						   int count,
+						   ReplayDBOutputMessage *output)
+{
+	SQLiteQuery query = {
+		.errorOnZeroRows = false,
+		.context = output,
+		.fetchFunction = &ld_store_output_fetch
+	};
+
+	if (!catalog_sql_prepare_cached(catalog, sql, &query) ||
+		!catalog_sql_bind(&query, params, count) ||
+		!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * ld_store_lookup_output_after_lsn searches the first message following the
  * given LSN in the replayDB database.
  *
@@ -608,20 +645,6 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 		return false;
 	}
 
-
-	/*
-	 * Order by LSN so that a BEGIN (which has the lowest LSN in its
-	 * transaction) is found before any internal markers (ENDPOS, KEEPALIVE)
-	 * that may have been inserted at the same LSN or higher.
-	 * Within the same LSN, prefer BEGIN (action='B') over other actions,
-	 * then fall back to insertion order (id) as a tiebreaker.
-	 *
-	 * SQLite requires ORDER BY on a UNION to reference result-set columns by
-	 * name, so wrap the UNION in a subquery to allow the CASE expression.
-	 *
-	 * Both branches now use >= (not just BEGIN) to ensure that internal
-	 * markers like ENDPOS are found even when inserted at the exact endpos LSN.
-	 */
 
 	/*
 	 * Find the next thing to process starting from transform_lsn.
@@ -691,62 +714,82 @@ ld_store_lookup_output_after_lsn(DatabaseCatalog *catalog,
 	 * (commits are always encountered, and written, in strictly increasing
 	 * LSN order), so the COMMIT row matching transform_lsn reliably gives
 	 * the id boundary of everything already applied.
+	 *
+	 * That row is the highest-LSN commit at or below transform_lsn, one seek
+	 * on o_a_lsn: max(id) would read every commit up to it.
 	 */
-	char *sql =
-		"select id, action, xid, lsn, timestamp, message, nspname, relname, old_type from ("
-		"  select id, action, xid, lsn, timestamp, message, nspname, relname, old_type "
-		"    from output "
-		"   where action = 'B' "
-		"     and id > (select coalesce(max(id), 0) from output "
-		"                 where action = 'C' and lsn <= $1) "
-		" union all "
-		"  select id, action, xid, lsn, timestamp, message, nspname, relname, old_type "
-		"    from output "
-		"   where lsn > $2 and action in ('K', 'X') "
-		") "
-		"order by id asc "
+
+	/*
+	 * Three single-row lookups rather than one UNION: a UNION ALL with an
+	 * ORDER BY is sorted through a temporary b-tree even when each branch
+	 * comes out of an index in order, and building one means allocating a
+	 * pager and its page cache, for every call.  Each lookup below is a
+	 * single seek.
+	 *
+	 * The next BEGIN is the first one after the commit row at transform_lsn
+	 * (see above).  The next KEEPALIVE and the next SWITCH are each the
+	 * first above their cursor, in LSN order, which is the order they were
+	 * inserted in.  The lowest id of the three is what comes next.
+	 */
+	static const char *beginSQL =
+		"select id, action, xid, lsn, timestamp, message, nspname, relname, old_type "
+		"  from output "
+		" where action = 'B' "
+		"   and id > coalesce((select id from output "
+		"                       where action = 'C' and lsn <= $1 "
+		"                    order by lsn desc limit 1), 0) "
+		"order by id "
+		"limit 1";
+
+	static const char *markerSQL =
+		"select id, action, xid, lsn, timestamp, message, nspname, relname, old_type "
+		"  from output "
+		" where action = $1 and lsn > $2 "
+		"order by lsn, id "
 		"limit 1";
 
 	log_debug("ld_store_lookup_output_after_lsn: %X/%X (keepalive %X/%X)",
 			  LSN_FORMAT_ARGS(lsn),
 			  LSN_FORMAT_ARGS(keepaliveLSN));
 
-	SQLiteQuery query = {
-		.errorOnZeroRows = false,
-		.context = output,
-		.fetchFunction = &ld_store_output_fetch
+	ReplayDBOutputMessage next = { 0 };
+
+	BindParam beginParams[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "lsn", lsn, NULL }
 	};
 
-
-	if (!catalog_sql_prepare(db, sql, &query))
+	if (!ld_store_lookup_output_one(catalog, beginSQL, beginParams, 1, &next))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
+	char *markers[] = { "K", "X" };
 
-	/* bind our parameters now */
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "lsn", lsn },
-		{ BIND_PARAMETER_TYPE_INT64, "keepaliveLSN", keepaliveLSN }
-	};
-
-	int count = sizeof(params) / sizeof(params[0]);
-
-	if (!catalog_sql_bind(&query, params, count))
+	for (int i = 0; i < 2; i++)
 	{
-		/* errors have already been logged */
-		return false;
+		ReplayDBOutputMessage marker = { 0 };
+
+		BindParam markerParams[] = {
+			{ BIND_PARAMETER_TYPE_TEXT, "action", 0, markers[i] },
+			{ BIND_PARAMETER_TYPE_INT64, "keepaliveLSN", keepaliveLSN, NULL }
+		};
+
+		if (!ld_store_lookup_output_one(catalog, markerSQL, markerParams, 2,
+										&marker))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (marker.lsn != InvalidXLogRecPtr &&
+			(next.lsn == InvalidXLogRecPtr || marker.id < next.id))
+		{
+			next = marker;
+		}
 	}
 
-
-	/* now execute the query, which return exactly one row */
-	if (!catalog_sql_execute_once(&query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
+	*output = next;
 
 	return true;
 }
@@ -800,7 +843,7 @@ ld_store_lookup_output_xid_end(DatabaseCatalog *catalog,
 		.fetchFunction = &ld_store_output_fetch
 	};
 
-	if (!catalog_sql_prepare(db, sql, &query))
+	if (!catalog_sql_prepare_cached(catalog, sql, &query))
 	{
 		/* errors have already been logged */
 		return false;
@@ -2631,7 +2674,7 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 					.fetchFunction = &ld_store_output_fetch
 				};
 
-				if (!catalog_sql_prepare(db, begin_sql, &bq))
+				if (!catalog_sql_prepare_cached(catalog, begin_sql, &bq))
 				{
 					iter->output = NULL;
 					return false;
@@ -2687,11 +2730,21 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 	 * run and now have a lower id than the re-delivered BEGIN (because
 	 * INSERT OR REPLACE renewed the BEGIN's id).  For a first-time run the
 	 * BEGIN has the lowest id so this filter is a no-op.
+	 *
+	 * The upper bound is the id of the COMMIT (or ROLLBACK) row found above.
+	 * Without it, SQLite walks the rowid range from the BEGIN to the end of
+	 * the table, filtering on xid, which reads every transaction that
+	 * receive has spooled since: the cost of transforming one transaction
+	 * then grows with the backlog.  When the end row was written before the
+	 * BEGIN (the artificial ROLLBACK case just described), there is no usable
+	 * bound and the range stays open.
 	 */
+	uint64_t endId = last.id > iter->output->id ? last.id : INT64_MAX;
+
 	char *sql =
 		"   select id, action, xid, lsn, timestamp, message "
 		"     from output "
-		"    where xid = $1 and id >= $2 "
+		"    where xid = $1 and id between $2 and $3 "
 		" order by id";
 
 
@@ -2702,13 +2755,14 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "xid", first.xid, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "id", iter->output->id, NULL }
+		{ BIND_PARAMETER_TYPE_INT64, "id", iter->output->id, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "endId", endId, NULL }
 	};
 
 	int count = sizeof(params) / sizeof(params[0]);
 
 
-	if (!catalog_sql_prepare(db, sql, query))
+	if (!catalog_sql_prepare_cached(catalog, sql, query))
 	{
 		/* errors have already been logged */
 		return false;
@@ -3087,6 +3141,38 @@ ld_store_replay_event_fetch(SQLiteQuery *query)
 
 
 /*
+ * ld_store_lookup_replay_one runs a query that returns at most one row of the
+ * replay table, with the columns of ld_store_replay_event_fetch, and fetches
+ * it into s: left zeroed (its action is STREAM_ACTION_UNKNOWN) when there is
+ * none.
+ */
+static bool
+ld_store_lookup_replay_one(DatabaseCatalog *catalog,
+						   const char *sql,
+						   BindParam *params,
+						   ReplayDBStmt *s)
+{
+	bzero(s, sizeof(ReplayDBStmt));
+
+	SQLiteQuery query = {
+		.errorOnZeroRows = false,
+		.context = s,
+		.fetchFunction = &ld_store_replay_event_fetch
+	};
+
+	if (!catalog_sql_prepare_cached(catalog, sql, &query) ||
+		!catalog_sql_bind(&query, params, 1) ||
+		!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
  * ld_store_replay_next_event returns the next event to apply after
  * previousLSN into s.  s->action is STREAM_ACTION_UNKNOWN when no rows.
  *
@@ -3121,10 +3207,9 @@ ld_store_replay_next_event(DatabaseCatalog *catalog,
 	 *
 	 * For transactions (action='B'): only return the BEGIN row when the
 	 * matching COMMIT or ROLLBACK row already exists in the replay table.
-	 * The JOIN on replay c ensures this: the transform writes BEGIN first
-	 * (with endlsn populated), then DML rows, then COMMIT — each as a
-	 * separate SQLite statement.  Without the JOIN we could see a BEGIN
-	 * before its COMMIT and DML rows have been written.
+	 * The transform writes BEGIN first (with endlsn populated), then DML
+	 * rows, then COMMIT, and its pass commits them together; the EXISTS
+	 * check keeps a BEGIN from coming back before its COMMIT is there.
 	 *
 	 * For non-transactional events (KEEPALIVE only — ENDPOS rows are no
 	 * longer written to the replay table): return the first KEEPALIVE row
@@ -3135,52 +3220,66 @@ ld_store_replay_next_event(DatabaseCatalog *catalog,
 	 * that commit below it and have not been applied yet, so filtering them
 	 * with it would drop them.  The cursor is still strict (>), because with
 	 * >= the row apply just consumed comes back and apply spins.
+	 *
+	 * Transactions come back in commit order, which is the order of their
+	 * endlsn: the apply process moves previousLSN to the commit it just ran,
+	 * and what commits below it is then skipped.  The BEGIN LSN, taken at the
+	 * first change, does not follow commit order once transactions overlap.
+	 * A KEEPALIVE sorts at its own lsn, and the first of the two goes first.
+	 *
+	 * Two single-row lookups rather than a UNION: see
+	 * ld_store_lookup_output_after_lsn.  Each names its index because the
+	 * planner's pick is wrong here: left alone, it walks the replay table in
+	 * lsn order, which means reading past every transaction already applied,
+	 * on every call.  With the index, ORDER BY and LIMIT make each a seek.
 	 */
-	char *sql =
-		"select b.id, b.action, b.xid, b.lsn, b.endlsn, b.timestamp "
-		"  from replay b "
-		"  join replay c on c.xid = b.xid and c.action in ('C', 'R') "
-		" where b.action = 'B' and b.endlsn > $1 "
-		"union all "
+	static const char *txnSQL =
 		"select id, action, xid, lsn, endlsn, timestamp "
-		"  from replay "
-		" where action = 'K' "            /* KEEPALIVE only — no ENDPOS rows */
-		"   and lsn > $2 "                /* strict: avoids re-delivering same row */
-		"order by lsn asc, id asc "
+		"  from replay indexed by r_a_endlsn "
+		" where action = 'B' and endlsn > $1 "
+		"   and exists (select 1 from replay c "
+		"                where c.xid = replay.xid and c.action in ('C', 'R')) "
+		"order by endlsn "
 		"limit 1";
 
-	bzero(s, sizeof(ReplayDBStmt));
+	static const char *keepaliveSQL =
+		"select id, action, xid, lsn, endlsn, timestamp "
+		"  from replay indexed by r_a_lsn "
+		" where action = 'K' "          /* KEEPALIVE only — no ENDPOS rows */
+		"   and lsn > $1 "              /* strict: avoids re-delivering same row */
+		"order by lsn, id "
+		"limit 1";
 
-	SQLiteQuery query = {
-		.errorOnZeroRows = false,
-		.context = s,
-		.fetchFunction = &ld_store_replay_event_fetch
+	ReplayDBStmt txn = { 0 };
+	ReplayDBStmt keepalive = { 0 };
+
+	BindParam txnParams[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "previousLSN", previousLSN, NULL }
 	};
 
-	if (!catalog_sql_prepare(db, sql, &query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	BindParam params[] = {
-		{ BIND_PARAMETER_TYPE_INT64, "previousLSN", previousLSN, NULL },
+	BindParam keepaliveParams[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "keepaliveLSN", keepaliveLSN, NULL }
 	};
 
-	int count = sizeof(params) / sizeof(params[0]);
-
-	if (!catalog_sql_bind(&query, params, count))
+	if (!ld_store_lookup_replay_one(catalog, txnSQL, txnParams, &txn) ||
+		!ld_store_lookup_replay_one(catalog, keepaliveSQL, keepaliveParams,
+									&keepalive))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (!catalog_sql_execute_once(&query))
-	{
-		/* errors have already been logged */
-		return false;
-	}
+	/* the next event is the one with the lower position, then the lower id */
+	bool haveTxn = txn.action != STREAM_ACTION_UNKNOWN;
+	bool haveKeepalive = keepalive.action != STREAM_ACTION_UNKNOWN;
+
+	bool keepaliveFirst =
+		haveKeepalive &&
+		(!haveTxn ||
+		 keepalive.lsn < txn.endlsn ||
+		 (keepalive.lsn == txn.endlsn && keepalive.id < txn.id));
+
+	*s = keepaliveFirst ? keepalive : txn;
 
 	return true;
 }
@@ -3225,7 +3324,7 @@ ld_store_iter_replay_txn_init(ReplayDBReplayTxnIterator *iter)
 	query->context = iter->current;
 	query->fetchFunction = &ld_store_replay_fetch;
 
-	if (!catalog_sql_prepare(db, sql, query))
+	if (!catalog_sql_prepare_cached(iter->catalog, sql, query))
 	{
 		/* errors have already been logged */
 		return false;
