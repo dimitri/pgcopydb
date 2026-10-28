@@ -4905,6 +4905,32 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 		}
 	}
 
+	/*
+	 * Postgres 17 added the FAILOVER option to CREATE_REPLICATION_SLOT, so
+	 * that the slot is copied to the physical standbys (see
+	 * sync_replication_slots) and survives a promotion. The option is only
+	 * available in the parenthesized syntax, which Postgres 15 introduced;
+	 * the snapshot is exported by default.
+	 */
+	if (slot->failover)
+	{
+		if (PQserverVersion(pgsql->connection) < 170000)
+		{
+			log_error("Failed to create replication slot \"%s\" with "
+					  "--enable-failover: the source server is Postgres %d "
+					  "and failover slots need Postgres 17 or later",
+					  client->slotName,
+					  PQserverVersion(pgsql->connection) / 10000);
+			pgsql_finish(pgsql);
+			return false;
+		}
+
+		sformat(query, sizeof(query),
+				"CREATE_REPLICATION_SLOT \"%s\" LOGICAL \"%s\" (FAILOVER true)",
+				client->slotName,
+				OutputPluginToString(client->plugin));
+	}
+
 	PGresult *result = PQexec(pgsql->connection, query);
 
 	if (PQresultStatus(result) != PGRES_TUPLES_OK)
@@ -5011,10 +5037,11 @@ pgsql_create_logical_replication_slot(LogicalStreamClient *client,
 		slot->plugin = client->plugin;
 	}
 
-	log_info("Created logical replication slot \"%s\" with plugin \"%s\" "
+	log_info("Created logical replication slot \"%s\" with plugin \"%s\"%s "
 			 "at %X/%X and exported snapshot %s",
 			 slot->slotName,
 			 OutputPluginToString(slot->plugin),
+			 slot->failover ? " (failover)" : "",
 			 LSN_FORMAT_ARGS(slot->lsn),
 			 slot->snapshot);
 
@@ -5578,6 +5605,14 @@ pgsql_stream_logical(LogicalStreamClient *client, LogicalStreamContext *context)
 
 	clear_results(pgsql);
 	pgsql_finish(pgsql);
+
+	/*
+	 * Remember that we were asked to stop before we unset the signals, the
+	 * caller must not reconnect then: when the follow supervisor terminates
+	 * the receive process it waits for it to exit.
+	 */
+	context->stopRequested =
+		asked_to_stop || asked_to_stop_fast || asked_to_quit;
 
 	/* unset the signals which have been processed correctly now */
 	(void) unset_signal_flags();

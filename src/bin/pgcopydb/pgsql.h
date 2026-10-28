@@ -510,6 +510,9 @@ typedef struct LogicalStreamContext
 	 * JSON file to avoid partial transactions.
 	 */
 	bool onRetry;
+
+	/* set to true when the streaming loop ended because we got signaled */
+	bool stopRequested;
 } LogicalStreamContext;
 
 
@@ -567,6 +570,7 @@ typedef struct ReplicationSlot
 	bool wal2jsonNumericAsString;
 	char publicationName[BUFSIZE]; /* pgoutput publication name */
 	bool publicationAutoManaged;   /* true = pgcopydb created it, drop on cleanup */
+	bool failover;                 /* create the slot with FAILOVER (PG 17+) */
 } ReplicationSlot;
 
 bool pgsql_create_logical_replication_slot(LogicalStreamClient *client,

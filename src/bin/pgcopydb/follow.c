@@ -301,6 +301,106 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
 
 
 /*
+ * FollowRestartPolicy implements the restart intensity limit that Erlang/OTP
+ * supervisors use (MaxR restarts within MaxT seconds): the sub-processes are
+ * restarted when they fail, with a decorrelated jitter backoff in between, as
+ * long as there have been fewer than maxRestarts restarts in the last
+ * windowSeconds seconds. Beyond that the failure is not transient, and we
+ * give up and let the operator (or the init system) deal with it.
+ */
+typedef struct FollowRestartPolicy
+{
+	int maxRestarts;
+	int windowSeconds;
+
+	time_t history[FOLLOW_MAX_RESTARTS_LIMIT];
+	int count;
+
+	ConnectionRetryPolicy backoff;
+} FollowRestartPolicy;
+
+
+/*
+ * follow_restart_policy_init initializes a restart policy.
+ */
+static void
+follow_restart_policy_init(FollowRestartPolicy *policy,
+						   int maxRestarts,
+						   int windowSeconds)
+{
+	policy->maxRestarts = maxRestarts;
+	policy->windowSeconds = windowSeconds;
+	policy->count = 0;
+
+	(void) pgsql_set_retry_policy(&(policy->backoff),
+								  windowSeconds,
+								  -1, /* we count restarts ourselves */
+								  FOLLOW_RESTART_CAP_SLEEP,
+								  FOLLOW_RESTART_BASE_SLEEP);
+
+	policy->backoff.sleepTime = FOLLOW_RESTART_BASE_SLEEP;
+}
+
+
+/*
+ * follow_restart_policy_allows records a restart at the current time and
+ * returns true when the policy allows it: fewer than maxRestarts restarts
+ * happened in the last windowSeconds seconds. The number of restarts in the
+ * window is returned in restarts.
+ */
+static bool
+follow_restart_policy_allows(FollowRestartPolicy *policy, int *restarts)
+{
+	time_t now = time(NULL);
+	int kept = 0;
+
+	/* forget about the restarts that are out of the window */
+	for (int i = 0; i < policy->count; i++)
+	{
+		if (now - policy->history[i] < policy->windowSeconds)
+		{
+			policy->history[kept++] = policy->history[i];
+		}
+	}
+
+	policy->count = kept;
+
+	if (policy->count >= policy->maxRestarts)
+	{
+		*restarts = policy->count;
+		return false;
+	}
+
+	policy->history[policy->count++] = now;
+	*restarts = policy->count;
+
+	return true;
+}
+
+
+/*
+ * follow_restart_backoff sleeps for the policy's next backoff time, and
+ * returns early when we have been asked to terminate.
+ */
+static void
+follow_restart_backoff(FollowRestartPolicy *policy, int *sleepTimeMs)
+{
+	*sleepTimeMs = pgsql_compute_connection_retry_sleep_time(&(policy->backoff));
+
+	/* sleep in short steps so that we notice signals */
+	for (int slept = 0; slept < *sleepTimeMs; slept += 100)
+	{
+		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+		{
+			return;
+		}
+
+		pg_usleep(100 * 1000);
+	}
+}
+
+
+/*
  * follow_main_loop implements the main loop for the follow sub-process
  * management. It loops between two modes of operations:
  *
@@ -312,7 +412,13 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
  * subprocesses and switch to the live replay mode of operations.
  *
  * When a sub-process ends abnormally then the main process terminates the
- * sibling worker processes and restart in the other mode.
+ * sibling worker processes and starts them all again, unless it already did so
+ * --max-restarts times in the last --restart-window seconds. This takes care
+ * of the failures that come and go by themselves: a lost connection to the
+ * source or the target, a server restart, a failover to a standby that has
+ * the replication slot. The receive process resumes at the sentinel
+ * startpos and the apply process at the replication origin progress, as they
+ * do with pgcopydb follow --resume.
  *
  * Each time we switch from a mode of operations to another, a catchup from
  * disk is done to ensure we don't miss applying what has already been
@@ -339,13 +445,59 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * communication and the three workers can restart in the same mode every
 	 * time.
 	 */
+	FollowRestartPolicy restartPolicy = { 0 };
+
+	follow_restart_policy_init(&restartPolicy,
+							   copyDBoptions.maxRestarts,
+							   copyDBoptions.restartWindow);
+
 	while (true)
 	{
 		if (!followDB(copySpecs, streamSpecs))
 		{
 			log_error("Failed to follow changes from source, "
 					  "see above for details");
-			return false;
+
+			if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+			{
+				return false;
+			}
+
+			/*
+			 * When the endpos has been reached the failure is of no
+			 * consequence, otherwise try again unless we have been restarting
+			 * too often already.
+			 */
+			bool done = false;
+			int restarts = 0;
+			int sleepTimeMs = 0;
+
+			if (catalog_open(streamSpecs->sourceDB) &&
+				follow_reached_endpos(streamSpecs, &done) && done)
+			{
+				return true;
+			}
+
+			if (!follow_restart_policy_allows(&restartPolicy, &restarts))
+			{
+				log_error("Follow has already been restarted %d times in the "
+						  "last %d seconds, giving up (see --max-restarts and "
+						  "--restart-window)",
+						  restarts,
+						  restartPolicy.windowSeconds);
+				return false;
+			}
+
+			(void) follow_restart_backoff(&restartPolicy, &sleepTimeMs);
+
+			log_warn("Restarting follow sub-processes after %d ms "
+					 "(restart %d of at most %d in %d seconds)",
+					 sleepTimeMs,
+					 restarts,
+					 restartPolicy.maxRestarts,
+					 restartPolicy.windowSeconds);
+
+			continue;
 		}
 
 		if (asked_to_quit)

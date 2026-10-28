@@ -40,6 +40,9 @@
      --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin
      --slot-name                   Use this Postgres replication slot name
      --create-slot                 Create the replication slot
+     --enable-failover             Create the replication slot with FAILOVER (Postgres 17+)
+     --max-restarts <n>            Restart failed follow sub-processes at most n times (default 5)
+     --restart-window <seconds>    ... within this many seconds (default 300)
      --origin                      Use this Postgres replication origin node name
      --endpos                      Stop replaying changes when reaching this LSN
      --use-copy-binary             Use the COPY BINARY format for COPY operations

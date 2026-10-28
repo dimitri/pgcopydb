@@ -732,6 +732,7 @@ startLogicalStreaming(StreamSpecs *specs)
 		bool cleanExit = pgsql_stream_logical(&stream, &context);
 
 		if ((cleanExit && context.endpos != InvalidXLogRecPtr) ||
+			context.stopRequested ||
 			asked_to_stop || asked_to_stop_fast || asked_to_quit)
 		{
 			retry = false;
