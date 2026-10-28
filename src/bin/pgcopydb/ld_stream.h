@@ -684,6 +684,14 @@ struct StreamSpecs
 	/* STREAM_MODE_REPLAY (and other operations) requires one unix pipe */
 	int pipe_rt[2];     /* receive→apply lifecycle signal pipe */
 
+	/*
+	 * receive→apply doorbell: receive writes a byte to pipe_wake[1] after each
+	 * commit to output.db, apply waits on pipe_wake[0] when it has nothing to
+	 * do.  Both ends are non-blocking, and the byte only means "look again":
+	 * a full pipe already says so.
+	 */
+	int pipe_wake[2];
+
 	/* The previous pipe ends are connected to in/out for the sub-processes */
 	FILE *in;
 	FILE *out;

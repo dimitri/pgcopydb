@@ -4,6 +4,7 @@
  */
 
 #include <errno.h>
+#include <fcntl.h>
 #include <getopt.h>
 #include <inttypes.h>
 #include <signal.h>
@@ -663,6 +664,30 @@ followDB(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 		return false;
 	}
 
+	/*
+	 * The doorbell pipe lets apply wait for new data instead of polling for
+	 * it: receive rings it after each commit to output.db.  Both ends are
+	 * non-blocking: receive must never wait on apply, and apply drains
+	 * whatever is there.
+	 */
+	if (pipe(streamSpecs->pipe_wake) != 0)
+	{
+		log_fatal("Failed to create receive→apply doorbell pipe: %m");
+		return false;
+	}
+
+	for (int i = 0; i < 2; i++)
+	{
+		int flags = fcntl(streamSpecs->pipe_wake[i], F_GETFL);
+
+		if (flags < 0 ||
+			fcntl(streamSpecs->pipe_wake[i], F_SETFL, flags | O_NONBLOCK) < 0)
+		{
+			log_fatal("Failed to set the doorbell pipe non-blocking: %m");
+			return false;
+		}
+	}
+
 	FollowSubProcess *prefetch = &(streamSpecs->prefetch);
 	FollowSubProcess *catchup = &(streamSpecs->catchup);
 
@@ -780,6 +805,7 @@ follow_start_prefetch(StreamSpecs *specs)
 
 		/* close the read end of the pipe: receive only writes */
 		close_fd_or_exit(specs->pipe_rt[0]);
+		close_fd_or_exit(specs->pipe_wake[0]);
 
 		/* switch out stream from block buffered to line buffered mode */
 		if (setvbuf(specs->out, NULL, _IOLBF, 0) != 0)
@@ -840,6 +866,7 @@ follow_start_catchup(StreamSpecs *specs)
 
 		/* close the write end: apply only reads from pipe_rt */
 		close_fd_or_exit(specs->pipe_rt[1]);
+		close_fd_or_exit(specs->pipe_wake[1]);
 
 		bool success = stream_apply_replay(specs);
 

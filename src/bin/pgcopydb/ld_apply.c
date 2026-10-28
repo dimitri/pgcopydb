@@ -290,6 +290,77 @@ stream_apply_check_upstream_done(StreamSpecs *specs,
 
 
 /*
+ * stream_apply_wait_for_work is the idle wait of the apply loop: it returns
+ * when receive rings the doorbell after committing to outputDB, when receive
+ * reports it is done, or after timeoutMs, whichever comes first.
+ *
+ * The bell only means "look again": it is drained here, before the next
+ * transform pass, and receive rings it after its commit, so a row committed
+ * from now on is seen by that pass or rings again.  The poll at the top of
+ * the loop must therefore leave the doorbell alone.
+ */
+static bool
+stream_apply_wait_for_work(StreamSpecs *specs,
+						   StreamApplyContext *context,
+						   int *pipe_rd,
+						   int timeoutMs)
+{
+	int bellFd = specs->pipe_wake[0];
+
+	if (bellFd <= 0)
+	{
+		/* no doorbell (not run by follow): the lifecycle pipe, or a sleep */
+		if (*pipe_rd >= 0)
+		{
+			return stream_apply_check_upstream_done(specs, context,
+													pipe_rd, timeoutMs);
+		}
+
+		(void) pg_usleep(timeoutMs * 1000);
+		return true;
+	}
+
+	fd_set rfds;
+	FD_ZERO(&rfds);
+	FD_SET(bellFd, &rfds);
+
+	int maxFd = bellFd;
+
+	if (*pipe_rd >= 0)
+	{
+		FD_SET(*pipe_rd, &rfds);
+		maxFd = Max(maxFd, *pipe_rd);
+	}
+
+	struct timeval tv = {
+		.tv_sec = timeoutMs / 1000,
+		.tv_usec = (timeoutMs % 1000) * 1000
+	};
+
+	int nready = select(maxFd + 1, &rfds, NULL, NULL, &tv);
+
+	if (nready < 0 && errno != EINTR)
+	{
+		log_error("apply select() on pipes: %m");
+		return false;
+	}
+
+	if (nready > 0 && FD_ISSET(bellFd, &rfds))
+	{
+		char drain[64];
+
+		while (read(bellFd, drain, sizeof(drain)) > 0)
+		{
+			/* the doorbell is non-blocking, this ends when it is empty */
+		}
+	}
+
+	/* the lifecycle pipe, if it is what woke us up */
+	return stream_apply_check_upstream_done(specs, context, pipe_rd, 0);
+}
+
+
+/*
  * stream_apply_replaydb is the main catchup loop for the SQLite-based CDC
  * pipeline.  It drives a transaction-oriented outer loop:
  *
@@ -682,24 +753,15 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			/*
 			 * Not caught up yet, and this pass produced no work (a pass
 			 * that did has already continued above).  This is the one
-			 * place in the loop that should actually wait: block on the
-			 * upstream-done pipe for up to 100ms, so a receive completion
-			 * is noticed promptly without busy-looping, and so idle passes
-			 * remain wall-clock bounded. With no pipe left to wait on
-			 * (catchup-only mode), fall back to a plain sleep instead.
+			 * place in the loop that should actually wait: block until
+			 * receive commits more rows or completes, for up to 100ms, so
+			 * both are noticed promptly without busy-looping, and so idle
+			 * passes remain wall-clock bounded.
 			 */
-			if (pipe_rd >= 0)
+			if (!stream_apply_wait_for_work(specs, context, &pipe_rd, 100))
 			{
-				if (!stream_apply_check_upstream_done(specs, context,
-													  &pipe_rd, 100))
-				{
-					success = false;
-					goto done;
-				}
-			}
-			else
-			{
-				pg_usleep(100 * 1000);  /* 100 ms */
+				success = false;
+				goto done;
 			}
 			continue;
 		}

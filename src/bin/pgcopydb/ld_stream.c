@@ -76,6 +76,8 @@ stream_init_specs(StreamSpecs *specs,
 	 */
 	specs->pipe_rt[0] = -1;
 	specs->pipe_rt[1] = -1;
+	specs->pipe_wake[0] = -1;
+	specs->pipe_wake[1] = -1;
 
 	specs->paths = *paths;
 	specs->endpos = endpos;
@@ -986,6 +988,18 @@ streamCommitOutput(StreamContext *privateContext)
 	}
 
 	privateContext->outputPendingMessages = 0;
+
+	/* tell the apply process there is something new to look at */
+	StreamSpecs *specs = privateContext->specs;
+
+	if (specs != NULL && specs->pipe_wake[1] > 0)
+	{
+		/* a full pipe (EAGAIN) means a wake-up is already pending */
+		char bell = '!';
+		ssize_t ignored = write(specs->pipe_wake[1], &bell, 1);
+
+		(void) ignored;
+	}
 
 	return true;
 }
