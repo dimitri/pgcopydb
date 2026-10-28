@@ -759,6 +759,40 @@ The following options are available to ``pgcopydb clone``:
 
   Instruct pgcopydb to create the logical replication slot to use.
 
+--enable-failover
+
+  Create the logical replication slot with the ``FAILOVER`` option, which
+  Postgres 17 introduced: the slot is then copied to the physical standbys
+  that run with ``sync_replication_slots = on`` (and ``hot_standby_feedback =
+  on``, ``primary_slot_name`` and a ``dbname`` in ``primary_conninfo``), and
+  it is available on the new primary after a promotion. Set
+  ``synchronized_standby_slots`` on the primary so that logical decoding
+  never gets ahead of what the standbys have received. Without it the slot
+  only exists on the server where it was created, and a failover of the
+  source ends the replication stream with ``replication slot "pgcopydb"
+  does not exist``. Fails when the source server is older than Postgres 17.
+
+  Only applies when pgcopydb creates the slot (``--create-slot``, or
+  ``--follow`` on a database that has no slot yet).
+
+--max-restarts, --restart-window
+
+  When one of the follow sub-processes fails (typically a lost connection to
+  the source or to the target, a server restart, or a failover of the
+  source), pgcopydb stops the other ones and starts them all again, after
+  waiting for a delay that grows with each attempt (1 second up to 30
+  seconds, with jitter). The receive process resumes from the sentinel
+  start position and the apply process from the replication origin
+  progress, as ``--resume`` does on a fresh command.
+
+  The restarts are limited the way Erlang/OTP supervisors limit them: when
+  the sub-processes have been restarted ``--max-restarts`` times (default
+  5) within ``--restart-window`` seconds (default 300) of the first one, the
+  failure is not transient, and ``pgcopydb follow`` exits with the error.
+  Use ``--max-restarts 0`` to exit on the first failure, and
+  ``--max-restarts -1`` to restart without a limit. The window starts at the
+  first failure; a failure that comes after it has elapsed starts a new one.
+
 --endpos
 
   Logical replication target LSN to use. Automatically stop replication and

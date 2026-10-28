@@ -95,6 +95,9 @@ follow-endpos-quiet-tail: build
 follow-ddl-message-stall: build
 	$(MAKE) -C $@
 
+follow-restart: build
+	$(MAKE) -C $@
+
 # Benchmark, not a pass/fail test -- not part of the CI matrix, run it
 # locally to measure apply throughput under a burst of small transactions.
 benchmark-apply: build
@@ -140,5 +143,6 @@ clean-images:
 .PHONY: cdc-pgoutput cdc-filtering-pgoutput follow-pgoutput follow-filtering
 .PHONY: follow-wal2json follow-9.6
 .PHONY: follow-endpos-tail follow-endpos-quiet-tail follow-ddl-message-stall
+.PHONY: follow-restart
 .PHONY: benchmark-apply
 .PHONY: timescaledb citus

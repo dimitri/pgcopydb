@@ -754,6 +754,9 @@ cli_copy_db_getopts(int argc, char **argv)
 		{ "publication", required_argument, NULL, 1003 },
 		{ "all-databases", no_argument, NULL, 1004 },
 		{ "replay-no-op-updates", no_argument, NULL, 1005 },
+		{ "enable-failover", no_argument, NULL, 1006 },
+		{ "max-restarts", required_argument, NULL, 1007 },
+		{ "restart-window", required_argument, NULL, 1008 },
 		{ "host", required_argument, NULL, 1001 },
 		{ "port", required_argument, NULL, 1002 },
 		{ "version", no_argument, NULL, 'V' },
@@ -767,6 +770,9 @@ cli_copy_db_getopts(int argc, char **argv)
 	};
 
 	optind = 0;
+
+	options.maxRestarts = FOLLOW_MAX_RESTARTS;
+	options.restartWindow = FOLLOW_RESTART_WINDOW;
 
 	/* read values from the environment */
 	if (!cli_copydb_getenv(&options))
@@ -1145,6 +1151,41 @@ cli_copy_db_getopts(int argc, char **argv)
 			{
 				options.replayNoOpUpdates = true;
 				log_trace("--replay-no-op-updates");
+				break;
+			}
+
+			case 1006:      /* --enable-failover */
+			{
+				options.slot.failover = true;
+				log_trace("--enable-failover");
+				break;
+			}
+
+			case 1007:      /* --max-restarts */
+			{
+				if (!stringToInt(optarg, &options.maxRestarts) ||
+					options.maxRestarts < -1)
+				{
+					log_fatal("Failed to parse --max-restarts, "
+							  "expected a number, -1 for no limit: \"%s\"",
+							  optarg);
+					++errors;
+				}
+				log_trace("--max-restarts %d", options.maxRestarts);
+				break;
+			}
+
+			case 1008:      /* --restart-window */
+			{
+				if (!stringToInt(optarg, &options.restartWindow) ||
+					options.restartWindow < 1)
+				{
+					log_fatal("Failed to parse --restart-window, "
+							  "expected a number of seconds: \"%s\"",
+							  optarg);
+					++errors;
+				}
+				log_trace("--restart-window %d", options.restartWindow);
 				break;
 			}
 

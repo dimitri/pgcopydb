@@ -88,6 +88,10 @@ typedef struct CopyDBOptions
 	bool follow;
 	bool createSlot;
 
+	/* pgcopydb follow: restart failed sub-processes, MaxR within MaxT */
+	int maxRestarts;
+	int restartWindow;
+
 	/* pgcopydb stream sentinel get --flush-lsn and friends */
 	SentinelOptions sentinelOptions;
 

@@ -102,6 +102,18 @@
 #define POSTGRES_CONNECT_TIMEOUT "10"
 
 /* retry PQping for a maximum of 1 min, up to 2 secs between attemps */
+
+/*
+ * pgcopydb follow restarts its receive and apply sub-processes when one of
+ * them fails: at most FOLLOW_MAX_RESTARTS restarts within FOLLOW_RESTART_WINDOW
+ * seconds, backing off between FOLLOW_RESTART_BASE_SLEEP and
+ * FOLLOW_RESTART_CAP_SLEEP milliseconds in between.
+ */
+#define FOLLOW_MAX_RESTARTS 5
+#define FOLLOW_RESTART_WINDOW 300                  /* seconds */
+#define FOLLOW_RESTART_BASE_SLEEP 1000             /* milliseconds */
+#define FOLLOW_RESTART_CAP_SLEEP (30 * 1000)       /* milliseconds */
+
 #define POSTGRES_PING_RETRY_TIMEOUT 60               /* seconds */
 #define POSTGRES_PING_RETRY_CAP_SLEEP_TIME (2 * 1000) /* milliseconds */
 #define POSTGRES_PING_RETRY_BASE_SLEEP_TIME 5         /* milliseconds */

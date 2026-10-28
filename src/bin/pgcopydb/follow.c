@@ -312,7 +312,13 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
  * subprocesses and switch to the live replay mode of operations.
  *
  * When a sub-process ends abnormally then the main process terminates the
- * sibling worker processes and restart in the other mode.
+ * sibling worker processes and starts them all again, unless it already did so
+ * --max-restarts times within --restart-window seconds. This takes care
+ * of the failures that come and go by themselves: a lost connection to the
+ * source or the target, a server restart, a failover to a standby that has
+ * the replication slot. The receive process resumes at the sentinel
+ * startpos and the apply process at the replication origin progress, as they
+ * do with pgcopydb follow --resume.
  *
  * Each time we switch from a mode of operations to another, a catchup from
  * disk is done to ensure we don't miss applying what has already been
@@ -339,13 +345,81 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * communication and the three workers can restart in the same mode every
 	 * time.
 	 */
+
+	/*
+	 * Restart the sub-processes when they fail, at most maxRestarts times
+	 * within restartWindow seconds (the Erlang/OTP supervisor MaxR/MaxT
+	 * rule), using the same retry policy as the connection retries.
+	 */
+	ConnectionRetryPolicy restartPolicy = { 0 };
+
+	(void) pgsql_set_retry_policy(&restartPolicy,
+								  copyDBoptions.restartWindow,
+								  copyDBoptions.maxRestarts,
+								  FOLLOW_RESTART_CAP_SLEEP,
+								  FOLLOW_RESTART_BASE_SLEEP);
+
+	restartPolicy.sleepTime = FOLLOW_RESTART_BASE_SLEEP;
+
 	while (true)
 	{
 		if (!followDB(copySpecs, streamSpecs))
 		{
 			log_error("Failed to follow changes from source, "
 					  "see above for details");
-			return false;
+
+			if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
+			{
+				return false;
+			}
+
+			/*
+			 * When the endpos has been reached the failure is of no
+			 * consequence, otherwise try again unless we have been restarting
+			 * too often already.
+			 */
+			bool done = false;
+
+			if (catalog_open(streamSpecs->sourceDB) &&
+				follow_reached_endpos(streamSpecs, &done) && done)
+			{
+				return true;
+			}
+
+			/* maxRestarts = 0 means no restart at all */
+			(void) pgsql_retry_policy_renew(&restartPolicy);
+
+			if (copyDBoptions.maxRestarts == 0 ||
+				pgsql_retry_policy_expired(&restartPolicy))
+			{
+				log_error("Follow has already been restarted %d times "
+						  "within %d seconds, giving up (see --max-restarts and "
+						  "--restart-window)",
+						  restartPolicy.attempts,
+						  restartPolicy.maxT);
+				return false;
+			}
+
+			int sleepTimeMs =
+				pgsql_compute_connection_retry_sleep_time(&restartPolicy);
+
+			log_warn("Restarting follow sub-processes after %d ms "
+					 "(restart %d of at most %d in %d seconds)",
+					 sleepTimeMs,
+					 restartPolicy.attempts,
+					 restartPolicy.maxR,
+					 restartPolicy.maxT);
+
+			/* sleep in short steps so that we notice signals */
+			for (int slept = 0;
+				 slept < sleepTimeMs &&
+				 !asked_to_quit && !asked_to_stop && !asked_to_stop_fast;
+				 slept += 100)
+			{
+				pg_usleep(100 * 1000);
+			}
+
+			continue;
 		}
 
 		if (asked_to_quit)

@@ -65,6 +65,9 @@
 	"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n" \
 	"  --slot-name                   Use this Postgres replication slot name\n" \
 	"  --create-slot                 Create the replication slot\n" \
+	"  --enable-failover             Create the replication slot with FAILOVER (Postgres 17+)\n" \
+	"  --max-restarts <n>            Restart failed follow sub-processes at most n times (default 5)\n" \
+	"  --restart-window <seconds>    ... within this many seconds (default 300)\n" \
 	"  --origin                      Use this Postgres replication origin node name\n" \
 	"  --endpos                      Stop replaying changes when reaching this LSN\n" \
 	"  --use-copy-binary             Use the COPY BINARY format for COPY operations\n" \
@@ -106,6 +109,9 @@ CommandLine follow_command =
 		"  --wal2json-numeric-as-string  Print numeric data type as string when using wal2json output plugin\n"
 		"  --slot-name                   Use this Postgres replication slot name\n"
 		"  --create-slot                 Create the replication slot\n"
+		"  --enable-failover             Create the replication slot with FAILOVER (Postgres 17+)\n"
+		"  --max-restarts <n>            Restart failed follow sub-processes at most n times (default 5)\n"
+		"  --restart-window <seconds>    ... within this many seconds (default 300)\n"
 		"  --origin                      Use this Postgres replication origin node name\n"
 		"  --endpos                      Stop replaying changes when reaching this LSN\n",
 		cli_copy_db_getopts,
