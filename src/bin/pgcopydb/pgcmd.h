@@ -337,13 +337,6 @@ typedef struct ArchiveContentItem
 	char defaultAclObjectType[PG_NAMEDATALEN];
 } ArchiveContentItem;
 
-
-typedef struct ArchiveContentArray
-{
-	int count;
-	ArchiveContentItem *array;  /* malloc'ed area */
-} ArchiveContentArray;
-
 /* specify section of a dump: pre-data, post-data, data, schema */
 typedef enum
 {
