@@ -76,8 +76,8 @@ static void archiveTocOverrideRestoreListName(ArchiveContentItem *item,
 /*
  * A function/procedure/aggregate's own balanced-parentheses argument
  * list, built up one comma-separated typename at a time: items/count
- * hand off directly to item->signatureArgs/signatureArgsCount, text is
- * the full verbatim reconstruction for item->signatureArgsText.
+ * hand off directly to item->signature.args/argsCount, text is the
+ * full verbatim reconstruction for item->signature.argsText.
  */
 typedef struct ArchiveArgList
 {
@@ -389,7 +389,8 @@ paren_inner_item:
  * separated (pg_dump always writes ", " between arguments). Each
  * argument is kept exactly as pg_get_function_identity_arguments() or
  * format_function_signature() printed it -- see pgcmd.h's own note on
- * signatureArgsText -- not lexed any further than typename already goes.
+ * ArchiveFunctionSignature's own argsText -- not lexed any further
+ * than typename already goes.
  */
 arglist:
 	/* empty */
@@ -534,16 +535,16 @@ entry:
 			{
 				free($6.items[0]);
 				free($6.items);
-				item->signatureArgs = NULL;
-				item->signatureArgsCount = 0;
+				item->signature.args = NULL;
+				item->signature.argsCount = 0;
 			}
 			else
 			{
-				item->signatureArgs = $6.items;
-				item->signatureArgsCount = $6.count;
+				item->signature.args = $6.items;
+				item->signature.argsCount = $6.count;
 			}
 
-			item->signatureArgsText = $6.text;
+			item->signature.argsText = $6.text;
 
 			/*
 			 * item->name stays narrowed to the bare function name
@@ -603,8 +604,8 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			item->castSourceType = strdup($7);
-			item->castTargetType = strdup($9);
+			item->cast.sourceType = strdup($7);
+			item->cast.targetType = strdup($9);
 
 			char *body = archiveTocSlice($3, $11);
 			archiveTocBuildSimpleNames(item, body, $12);
@@ -629,9 +630,9 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			item->transformType = strdup($6);
-			strlcpy(item->transformLanguage, $8.text,
-					sizeof(item->transformLanguage));
+			item->transform.type = strdup($6);
+			strlcpy(item->transform.language, $8.text,
+					sizeof(item->transform.language));
 
 			char *body = archiveTocSlice($3, $9);
 			archiveTocBuildSimpleNames(item, body, $10);
@@ -655,10 +656,10 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			strlcpy(item->userMappingUser, $8.text,
-					sizeof(item->userMappingUser));
-			strlcpy(item->userMappingServer, $10.text,
-					sizeof(item->userMappingServer));
+			strlcpy(item->userMapping.user, $8.text,
+					sizeof(item->userMapping.user));
+			strlcpy(item->userMapping.server, $10.text,
+					sizeof(item->userMapping.server));
 
 			char *body = archiveTocSlice($3, $11);
 			archiveTocBuildSimpleNames(item, body, $12);
@@ -769,16 +770,16 @@ nested_entry:
 			{
 				free($6.items[0]);
 				free($6.items);
-				item->signatureArgs = NULL;
-				item->signatureArgsCount = 0;
+				item->signature.args = NULL;
+				item->signature.argsCount = 0;
 			}
 			else
 			{
-				item->signatureArgs = $6.items;
-				item->signatureArgsCount = $6.count;
+				item->signature.args = $6.items;
+				item->signature.argsCount = $6.count;
 			}
 
-			item->signatureArgsText = $6.text;
+			item->signature.argsText = $6.text;
 
 			archiveTocBuildSimpleNames(item, $4.text, $9);
 			archiveTocBuildUseListRemainder(item, $3, $8, $9);
@@ -792,10 +793,10 @@ nested_entry:
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			archiveTocSetOperatorArg(&item->operatorHasLeftArg,
-									  &item->operatorLeftArg, $7);
-			archiveTocSetOperatorArg(&item->operatorHasRightArg,
-									  &item->operatorRightArg, $10);
+			archiveTocSetOperatorArg(&item->operatorArgs.hasLeftArg,
+									  &item->operatorArgs.leftArg, $7);
+			archiveTocSetOperatorArg(&item->operatorArgs.hasRightArg,
+									  &item->operatorArgs.rightArg, $10);
 
 			archiveTocBuildSimpleNames(item, $4.text, $13);
 			archiveTocBuildUseListRemainder(item, $3, $12, $13);
@@ -809,8 +810,8 @@ nested_entry:
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			item->castSourceType = strdup($5);
-			item->castTargetType = strdup($7);
+			item->cast.sourceType = strdup($5);
+			item->cast.targetType = strdup($7);
 
 			char *body = archiveTocSlice($3, $9);
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
@@ -841,9 +842,9 @@ nested_entry:
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			item->transformType = strdup($3);
-			strlcpy(item->transformLanguage, $5.text,
-					sizeof(item->transformLanguage));
+			item->transform.type = strdup($3);
+			strlcpy(item->transform.language, $5.text,
+					sizeof(item->transform.language));
 
 			char *body = archiveTocSlice($2, $6);
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
@@ -862,7 +863,7 @@ nested_entry:
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			strlcpy(item->accessMethod, $6.text, sizeof(item->accessMethod));
+			strlcpy(item->opClassFamily.accessMethod, $6.text, sizeof(item->opClassFamily.accessMethod));
 
 			/*
 			 * item->name/restoreListName use the NARROWED name, sliced
@@ -1063,7 +1064,7 @@ archiveTocWrapParen(char *inner)
 
 /*
  * archiveTocAppendArg extends an argument list's own verbatim
- * reconstruction (item->signatureArgsText) with one more ", "-separated
+ * reconstruction (item->signature.argsText) with one more ", "-separated
  * argument -- `arg` is NOT freed here (unlike archiveTocConcat/
  * archiveTocJoinWords's inputs): it is also stored directly into the
  * arglist's own items[] array by the args rule that calls this, so it
@@ -1299,8 +1300,8 @@ archiveTocOverrideRestoreListName(ArchiveContentItem *item,
 
 /*
  * archiveTocSetOperatorArg sets one side of an OPERATOR's own operand
- * types (operatorLeftArg/operatorRightArg) from its already-reconstructed
- * typename text, "NONE" literally (dumpOpr's own text for a prefix or
+ * types (item->operatorArgs' own leftArg/rightArg) from its already-
+ * reconstructed typename text, "NONE" literally (dumpOpr's own text for a prefix or
  * postfix operator missing that side, pg_dump.c) meaning absent rather
  * than a real type name.
  */

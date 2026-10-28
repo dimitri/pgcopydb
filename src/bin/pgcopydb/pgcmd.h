@@ -155,6 +155,107 @@ typedef enum
  * (COMMENT ON, SECURITY LABEL, GRANT/REVOKE) these archive entries are the
  * already-executed result of.
  */
+/*
+ * ArchiveFunctionSignature is set when objectType (ArchiveContentItem's
+ * own field, below) is FUNCTION, PROCEDURE or AGGREGATE, OR when desc
+ * itself is one of those three for a plain, non-ACL/COMMENT entry: the
+ * raw text pg_dump wrote between name's own parentheses, and that same
+ * text split on its top-level commas (a nested pair from a type's own
+ * typmod, e.g. "numeric(10,2)", isn't a boundary) into one string per
+ * argument -- see archive_toc_grammar.y's own `args`/`arglist`. Each
+ * argument is kept verbatim, but the two cases differ in content, not
+ * shape: the ACL/COMMENT case uses pg_get_function_identity_arguments()
+ * ("[argmode] [argname] argtype", what dumpComment/dumpACL use), while
+ * the plain-entry case uses format_function_signature()/
+ * format_aggregate_signature() (bare "argtype" only, no argmode/argname
+ * -- what the entry's own tag uses for overload resolution, pg_dump.c).
+ * Either way, argtype is a full Postgres type-name expression, not a
+ * lexable token, so we go no further than this (see the file's own
+ * naming note). A zero-argument aggregate's literal "(*)"
+ * (format_function_arguments' own special case, not a real argument)
+ * is argsCount == 0, argsText == "*".
+ */
+typedef struct ArchiveFunctionSignature
+{
+	char *argsText;              /* malloc'ed area */
+	char **args;                 /* malloc'ed array of malloc'ed strings */
+	int argsCount;
+} ArchiveFunctionSignature;
+
+/*
+ * ArchiveOperatorArgs is set when objectType is OPERATOR: the left and
+ * right operand type, or absent (hasLeftArg/hasRightArg false, as
+ * pg_dump itself writes "NONE" for that side) for a prefix or postfix
+ * operator that doesn't have it. OPERATOR's own plain, non-ACL/COMMENT
+ * entry has no equivalent: its tag is the bare operator symbol only
+ * (dumpOpr's own ArchiveEntry, pg_dump.c), no operand types at all.
+ */
+typedef struct ArchiveOperatorArgs
+{
+	bool hasLeftArg;
+	char *leftArg;                /* malloc'ed area */
+	bool hasRightArg;
+	char *rightArg;               /* malloc'ed area */
+} ArchiveOperatorArgs;
+
+/*
+ * ArchiveCastTypes is set when desc == ARCHIVE_TAG_CAST: the two halves
+ * of dumpCast's own "(sourcetype AS targettype)" (pg_dump.c) -- full
+ * Postgres type-name expressions, same "not a lexable token" rule as
+ * ArchiveFunctionSignature's own argsText.
+ */
+typedef struct ArchiveCastTypes
+{
+	char *sourceType;             /* malloc'ed area */
+	char *targetType;             /* malloc'ed area */
+} ArchiveCastTypes;
+
+/*
+ * ArchiveUserMapping is set when desc == ARCHIVE_TAG_USER_MAPPING: the
+ * two halves of dumpUserMappings' own "USER MAPPING usename SERVER
+ * servername" (pg_dump.c) -- plain identifiers, never escaped by
+ * pg_dump (see archive_toc_lexer.l's own note on this format never
+ * quoting the owner field either). USER_MAPPING has no ACL/COMMENT
+ * form: neither GRANT nor COMMENT ON applies to a user mapping.
+ */
+typedef struct ArchiveUserMapping
+{
+	char user[PG_NAMEDATALEN];
+	char server[PG_NAMEDATALEN];
+} ArchiveUserMapping;
+
+/*
+ * ArchiveTransform is set when desc == ARCHIVE_TAG_TRANSFORM (either as
+ * the plain entry, or as objectType for a COMMENT ON TRANSFORM --
+ * dumpTransform does call dumpComment, pg_dump.c): the two halves of
+ * pg_dump's own "FOR typename LANGUAGE langname". See
+ * https://www.postgresql.org/docs/current/sql-createtransform.html --
+ * a TRANSFORM tells a procedural language (PL/Python, PL/Perl, ...) how
+ * to convert a given SQL type to and from that language's own native
+ * representation. type is a full Postgres type-name expression, same
+ * "go no further" rule as above; language is a plain identifier.
+ */
+typedef struct ArchiveTransform
+{
+	char *type;                   /* malloc'ed area */
+	char language[PG_NAMEDATALEN];
+} ArchiveTransform;
+
+/*
+ * ArchiveOpClassFamily is set when objectType is OPERATOR_CLASS or
+ * OPERATOR_FAMILY (ACL/COMMENT only -- a plain top-level OPERATOR
+ * CLASS/FAMILY entry is just the bare name, no "USING amname": that
+ * text is only ever built for binary_upgrade_extension_member's own
+ * tag, never for the ArchiveEntry itself, see dumpOpclass/dumpOpfamily
+ * in pg_dump.c): the index access method named after "USING" in e.g.
+ * "fixture_int_ops USING btree".
+ */
+typedef struct ArchiveOpClassFamily
+{
+	char accessMethod[PG_NAMEDATALEN];
+} ArchiveOpClassFamily;
+
+
 typedef struct ArchiveContentItem
 {
 	int dumpId;
@@ -209,72 +310,20 @@ typedef struct ArchiveContentItem
 	char *useListRemainder;      /* malloc'ed area */
 
 	/*
-	 * Set when objectType (above) is FUNCTION, PROCEDURE or AGGREGATE, OR
-	 * when desc itself is one of those three for a plain, non-ACL/COMMENT
-	 * entry: the raw text pg_dump wrote between name's own parentheses,
-	 * and that same text split on its top-level commas (a nested pair
-	 * from a type's own typmod, e.g. "numeric(10,2)", isn't a boundary)
-	 * into one string per argument -- see archive_toc_grammar.y's own
-	 * `args`/`arglist`. Each argument is kept verbatim, but the two cases
-	 * differ in content, not shape: the ACL/COMMENT case uses
-	 * pg_get_function_identity_arguments() ("[argmode] [argname]
-	 * argtype", what dumpComment/dumpACL use), while the plain-entry case
-	 * uses format_function_signature()/format_aggregate_signature()
-	 * (bare "argtype" only, no argmode/argname -- what the entry's own
-	 * tag uses for overload resolution, pg_dump.c). Either way, argtype
-	 * is a full Postgres type-name expression, not a lexable token, so
-	 * we go no further than this (see the file's own naming note). A
-	 * zero-argument aggregate's literal "(*)" (format_function_arguments'
-	 * own special case, not a real argument) is signatureArgsCount == 0,
-	 * signatureArgsText == "*".
+	 * The "overlapping fields": each of these applies both to a tag's
+	 * own plain, top-level entry (desc) and (where pg_dump supports a
+	 * COMMENT on it) its ACL/COMMENT-wrapped one (objectType) -- see
+	 * archive_toc_grammar.y's own TOP_CAST/NESTED_CAST and similar
+	 * pairs. name/restoreListName above keep their existing, narrower
+	 * contract regardless; these are purely additional detail for the
+	 * one object type each applies to, see each struct's own comment.
 	 */
-	char *signatureArgsText;     /* malloc'ed area */
-	char **signatureArgs;        /* malloc'ed array of malloc'ed strings */
-	int signatureArgsCount;
-
-	/*
-	 * Set when objectType (above) is OPERATOR: the left and right operand
-	 * type, or absent (hasLeftArg/hasRightArg false, as pg_dump itself
-	 * writes "NONE" for that side) for a prefix or postfix operator that
-	 * doesn't have it. OPERATOR's own plain, non-ACL/COMMENT entry has no
-	 * equivalent: its tag is the bare operator symbol only (dumpOpr's own
-	 * ArchiveEntry, pg_dump.c), no operand types at all.
-	 */
-	bool operatorHasLeftArg;
-	char *operatorLeftArg;       /* malloc'ed area */
-	bool operatorHasRightArg;
-	char *operatorRightArg;      /* malloc'ed area */
-
-	/*
-	 * A handful of other tags whose remainder, while irregular enough
-	 * overall to stay on the generic nspname/name/owner split, still has
-	 * its own fully regular internal structure worth splitting out too --
-	 * same "overlapping fields" principle as signatureArgsText/
-	 * operatorLeftArg above: name/restoreListName keep their existing,
-	 * narrower contract, these are purely additional. Each applies both
-	 * to the tag's own plain, top-level entry and (where pg_dump supports
-	 * a COMMENT on it) its ACL/COMMENT-wrapped one -- see
-	 * archive_toc_grammar.y's own TOP_CAST/NESTED_CAST and similar pairs.
-	 */
-
-	/*
-	 * Set when desc == ARCHIVE_TAG_CAST: the two halves of dumpCast's own
-	 * "(sourcetype AS targettype)" (pg_dump.c) -- full Postgres type-name
-	 * expressions, same "not a lexable token" rule as signatureArgsText.
-	 */
-	char *castSourceType;        /* malloc'ed area */
-	char *castTargetType;        /* malloc'ed area */
-
-	/*
-	 * Set when desc == ARCHIVE_TAG_USER_MAPPING: the two halves of
-	 * dumpUserMappings' own "USER MAPPING usename SERVER servername"
-	 * (pg_dump.c) -- plain identifiers, never escaped by pg_dump (see
-	 * archive_toc_lexer.l's own note on this format never quoting the
-	 * owner field either). USER_MAPPING has no ACL/COMMENT form: neither
-	 * GRANT nor COMMENT ON applies to a user mapping.
-	 */
-	char userMappingUser[PG_NAMEDATALEN];
-	char userMappingServer[PG_NAMEDATALEN];
+	ArchiveFunctionSignature signature;
+	ArchiveOperatorArgs operatorArgs;
+	ArchiveCastTypes cast;
+	ArchiveUserMapping userMapping;
+	ArchiveTransform transform;
+	ArchiveOpClassFamily opClassFamily;
 
 	/*
 	 * Set when desc == ARCHIVE_TAG_DEFAULT_ACL: which of the 6 literal
@@ -282,35 +331,10 @@ typedef struct ArchiveContentItem
 	 * ("TABLES", "SEQUENCES", "FUNCTIONS", "TYPES", "SCHEMAS", "LARGE
 	 * OBJECTS"), following "DEFAULT PRIVILEGES FOR" in its tag. This is
 	 * itself a top-level tag distinct from the generic ACL one -- it has
-	 * no further ACL/COMMENT-wrapped form.
+	 * no further ACL/COMMENT-wrapped form, so unlike the structs above it
+	 * stays a single flat field.
 	 */
 	char defaultAclObjectType[PG_NAMEDATALEN];
-
-	/*
-	 * Set when desc == ARCHIVE_TAG_TRANSFORM (either as the plain entry,
-	 * or as objectType for a COMMENT ON TRANSFORM -- dumpTransform does
-	 * call dumpComment, pg_dump.c): the two halves of pg_dump's own "FOR
-	 * typename LANGUAGE langname". See
-	 * https://www.postgresql.org/docs/current/sql-createtransform.html --
-	 * a TRANSFORM tells a procedural language (PL/Python, PL/Perl, ...)
-	 * how to convert a given SQL type to and from that language's own
-	 * native representation. typename is a full Postgres type-name
-	 * expression, same "go no further" rule as above; langname is a
-	 * plain identifier.
-	 */
-	char *transformType;         /* malloc'ed area */
-	char transformLanguage[PG_NAMEDATALEN];
-
-	/*
-	 * Set when objectType (above) is OPERATOR_CLASS or OPERATOR_FAMILY
-	 * (ACL/COMMENT only -- a plain top-level OPERATOR CLASS/FAMILY entry
-	 * is just the bare name, no "USING amname": that text is only ever
-	 * built for binary_upgrade_extension_member's own tag, never for the
-	 * ArchiveEntry itself, see dumpOpclass/dumpOpfamily in pg_dump.c):
-	 * the index access method named after "USING" in e.g. "fixture_int_
-	 * ops USING btree".
-	 */
-	char accessMethod[PG_NAMEDATALEN];
 } ArchiveContentItem;
 
 

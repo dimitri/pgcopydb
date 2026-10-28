@@ -2427,11 +2427,12 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 	 * MAPPING/DEFAULT ACL/TRANSFORM entry still (archive_toc_grammar.y's
 	 * TOP_CAST/TOP_USER_MAPPING/TOP_DEFAULT_ACL/TOP_TRANSFORM productions
 	 * don't narrow item->name itself, only add further fields alongside
-	 * it); for FUNCTION/PROCEDURE/AGGREGATE (either the plain entry or its ACL/
-	 * COMMENT), the signature is split out instead -- item->
-	 * signatureArgsText -- and for OPERATOR, item->operatorLeftArg/
-	 * RightArg, for CAST/TRANSFORM, item->castSourceType/TargetType and
-	 * item->transformType -- so check whichever of those applies too.
+	 * it); for FUNCTION/PROCEDURE/AGGREGATE (either the plain entry or its
+	 * ACL/COMMENT), the signature is split out instead --
+	 * item->signature.argsText -- and for OPERATOR, item->operatorArgs.
+	 * leftArg/rightArg, for CAST/TRANSFORM, item->cast.sourceType/
+	 * targetType and item->transform.type -- so check whichever of those
+	 * applies too.
 	 * Matching is still a plain substring search, not a parse of the
 	 * argument list: pg_dump's own TOC format doesn't split out individual
 	 * argument types either, and going that far isn't worth it (see this
@@ -2444,17 +2445,17 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 		bool found =
 			(!IS_EMPTY_STRING_BUFFER(item->name) &&
 			 strstr(item->name, pattern) != NULL) ||
-			(item->signatureArgsText != NULL &&
-			 strstr(item->signatureArgsText, pattern) != NULL) ||
-			(item->operatorHasLeftArg &&
-			 strstr(item->operatorLeftArg, pattern) != NULL) ||
-			(item->operatorHasRightArg &&
-			 strstr(item->operatorRightArg, pattern) != NULL) ||
-			(item->castSourceType != NULL &&
-			 (strstr(item->castSourceType, pattern) != NULL ||
-			  strstr(item->castTargetType, pattern) != NULL)) ||
-			(item->transformType != NULL &&
-			 strstr(item->transformType, pattern) != NULL);
+			(item->signature.argsText != NULL &&
+			 strstr(item->signature.argsText, pattern) != NULL) ||
+			(item->operatorArgs.hasLeftArg &&
+			 strstr(item->operatorArgs.leftArg, pattern) != NULL) ||
+			(item->operatorArgs.hasRightArg &&
+			 strstr(item->operatorArgs.rightArg, pattern) != NULL) ||
+			(item->cast.sourceType != NULL &&
+			 (strstr(item->cast.sourceType, pattern) != NULL ||
+			  strstr(item->cast.targetType, pattern) != NULL)) ||
+			(item->transform.type != NULL &&
+			 strstr(item->transform.type, pattern) != NULL);
 
 		if (!found)
 		{
@@ -2495,16 +2496,16 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 			 * ACL/COMMENT): the raw argument-list text, and that same
 			 * text split on its own top-level commas.
 			 */
-			if (item->signatureArgsText != NULL)
+			if (item->signature.argsText != NULL)
 			{
-				json_object_set_string(jsobj, "args", item->signatureArgsText);
+				json_object_set_string(jsobj, "args", item->signature.argsText);
 
 				JSON_Value *jsArgs = json_value_init_array();
 				JSON_Array *jsArgsArray = json_value_get_array(jsArgs);
 
-				for (int i = 0; i < item->signatureArgsCount; i++)
+				for (int i = 0; i < item->signature.argsCount; i++)
 				{
-					json_array_append_string(jsArgsArray, item->signatureArgs[i]);
+					json_array_append_string(jsArgsArray, item->signature.args[i]);
 				}
 
 				json_object_set_value(jsobj, "argsList", jsArgs);
@@ -2515,14 +2516,14 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 			 * empty when that side is NONE (a prefix or postfix operator
 			 * missing it).
 			 */
-			if (item->operatorHasLeftArg || item->operatorHasRightArg)
+			if (item->operatorArgs.hasLeftArg || item->operatorArgs.hasRightArg)
 			{
 				json_object_set_string(jsobj, "leftArg",
-									   item->operatorHasLeftArg
-									   ? item->operatorLeftArg : "");
+									   item->operatorArgs.hasLeftArg
+									   ? item->operatorArgs.leftArg : "");
 				json_object_set_string(jsobj, "rightArg",
-									   item->operatorHasRightArg
-									   ? item->operatorRightArg : "");
+									   item->operatorArgs.hasRightArg
+									   ? item->operatorArgs.rightArg : "");
 			}
 
 			/*
@@ -2530,20 +2531,20 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 			 * DEFAULT ACL, TRANSFORM, and an OPERATOR CLASS/FAMILY
 			 * ACL/COMMENT's own access method.
 			 */
-			if (item->castSourceType != NULL)
+			if (item->cast.sourceType != NULL)
 			{
 				json_object_set_string(jsobj, "castSourceType",
-									   item->castSourceType);
+									   item->cast.sourceType);
 				json_object_set_string(jsobj, "castTargetType",
-									   item->castTargetType);
+									   item->cast.targetType);
 			}
 
-			if (!IS_EMPTY_STRING_BUFFER(item->userMappingUser))
+			if (!IS_EMPTY_STRING_BUFFER(item->userMapping.user))
 			{
 				json_object_set_string(jsobj, "userMappingUser",
-									   item->userMappingUser);
+									   item->userMapping.user);
 				json_object_set_string(jsobj, "userMappingServer",
-									   item->userMappingServer);
+									   item->userMapping.server);
 			}
 
 			if (!IS_EMPTY_STRING_BUFFER(item->defaultAclObjectType))
@@ -2552,18 +2553,18 @@ cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
 									   item->defaultAclObjectType);
 			}
 
-			if (item->transformType != NULL)
+			if (item->transform.type != NULL)
 			{
 				json_object_set_string(jsobj, "transformType",
-									   item->transformType);
+									   item->transform.type);
 				json_object_set_string(jsobj, "transformLanguage",
-									   item->transformLanguage);
+									   item->transform.language);
 			}
 
-			if (!IS_EMPTY_STRING_BUFFER(item->accessMethod))
+			if (!IS_EMPTY_STRING_BUFFER(item->opClassFamily.accessMethod))
 			{
 				json_object_set_string(jsobj, "accessMethod",
-									   item->accessMethod);
+									   item->opClassFamily.accessMethod);
 			}
 
 			char *serialized = json_serialize_to_string(js);
