@@ -29,6 +29,7 @@ typedef struct Semaphore
 
 	bool reentrant;
 	int depth;
+	pid_t lockedBy;  /* the process that holds the lock, when depth > 0 */
 
 	bool debug;
 } Semaphore;
