@@ -31,13 +31,12 @@ void archive_toc_lex_line(const char *line);
 void archive_toc_begin_nested_tag(void);
 
 /*
- * Bracket the text of whichever token archive_toc_lex() just matched --
- * see archive_toc_lexer.l's own file header on YY_USER_ACTION, and
- * archive_toc_grammar.y's `mark` nonterminal, the only thing that reads
- * these (and only from specific, fixed mid-rule points, never from an
+ * The end of whichever token archive_toc_lex() just matched -- see
+ * archive_toc_lexer.l's own file header on YY_USER_ACTION, and archive_
+ * toc_grammar.y's `mark` nonterminal, the only thing that reads this
+ * (and only from specific, fixed mid-rule points, never from an
  * ordinary end-of-rule action).
  */
-extern const char *archive_toc_token_start;
 extern const char *archive_toc_token_end;
 
 #endif /* ARCHIVE_TOC_LEXER_H */

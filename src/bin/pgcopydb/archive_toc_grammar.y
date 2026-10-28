@@ -87,8 +87,19 @@ typedef struct ArchiveArgList
 {
 	char **items;
 	int count;
+	int cap;        /* allocated size of items[], see archiveTocArgListAppend */
 	char *text;
 } ArchiveArgList;
+
+/*
+ * Declared here, inside %code requires, rather than in the plain %{ %}
+ * prologue above: bison's own generated archive_toc_grammar.c includes
+ * archive_toc_grammar.h (which is where %code requires's own content
+ * also goes) AFTER that prologue, so a prologue-level declaration
+ * referencing ArchiveArgList would reference a type that doesn't exist
+ * yet at that point in the generated file.
+ */
+static void archiveTocArgListAppend(ArchiveArgList *list, char *item);
 }
 
 %define api.prefix {archive_toc_}
@@ -123,24 +134,30 @@ typedef struct ArchiveArgList
 	ArchiveArgList arglist;
 }
 
-%token <oid> TOK_OID
-%token TOK_SEMICOLON TOK_SPACE TOK_UNKNOWN TOK_EOF
-%token TOK_DASH TOK_LPAREN TOK_RPAREN TOK_COMMA TOK_DOT
-%token TOK_AS TOK_FOR TOK_LANGUAGE_KW TOK_SERVER_KW TOK_USING TOK_ON TOK_DOMAIN
-%token TOK_NO_OWNER
-%token <word> TOK_WORD TOK_LASTWORD
-%token <tag> TOK_ACL TOK_COMMENT
-%token <tag> TOK_TOP_SIMPLE TOK_TOP_RELATION TOK_TOP_FUNCLIKE TOK_TOP_OPERATOR
-%token <tag> TOK_TOP_CAST TOK_TOP_TRANSFORM TOK_TOP_USER_MAPPING TOK_TOP_DEFAULT_ACL
-%token <tag> TOK_NESTED_GENERIC TOK_NESTED_EXTENSION TOK_NESTED_RELATION_LIKE
-%token <tag> TOK_NESTED_COLUMN TOK_NESTED_ON_RELATION TOK_NESTED_FUNCLIKE
-%token <tag> TOK_NESTED_OPERATOR TOK_NESTED_CAST TOK_NESTED_TRANSFORM
-%token <tag> TOK_NESTED_OPCLASS_FAMILY
+/*
+ * Token names follow scan.l/gram.y's own convention rather than a
+ * uniform  prefix -- see archive_toc_lexer.l's own file header for
+ * why: it makes a production read like the input text it matches.
+ */
+%token <oid> OID
+%token UNKNOWN
+%token AS FOR LANGUAGE_KW SERVER_KW USING ON DOMAIN
+%token NO_OWNER
+%token <word> WORD LASTWORD
+%token <pos> SPACE
+%token <tag> ACL COMMENT
+%token <tag> TOP_SIMPLE TOP_RELATION TOP_FUNCLIKE TOP_OPERATOR
+%token <tag> TOP_CAST TOP_TRANSFORM TOP_USER_MAPPING TOP_DEFAULT_ACL
+%token <tag> NESTED_GENERIC NESTED_EXTENSION NESTED_RELATION_LIKE
+%token <tag> NESTED_COLUMN NESTED_ON_RELATION NESTED_FUNCLIKE
+%token <tag> NESTED_OPERATOR NESTED_CAST NESTED_TRANSFORM
+%token <tag> NESTED_OPCLASS_FAMILY
+%token <pos> '(' ')' ',' '.'
 
-%type <str> namespace_field typename paren_group paren_inner
-%type <str> paren_inner_item owner_text
+%type <str> nspname typename paren_group paren_inner
+%type <str> paren_inner_item owner
 %type <arglist> arglist args
-%type <pos> mark
+%type <pos> mark relname_item relname name
 %type <span> wordname
 
 %start toc_line
@@ -148,32 +165,43 @@ typedef struct ArchiveArgList
 %%
 
 toc_line:
-	TOK_OID TOK_SEMICOLON TOK_SPACE TOK_OID TOK_SPACE TOK_OID TOK_SPACE entry
+	OID ';' OID OID entry
 		{
+			/*
+			 * No explicit SPACE tokens here: INITIAL silently skips
+			 * interior whitespace in this fixed dumpId/catalogOid/
+			 * objectOid/TAG prefix (see archive_toc_lexer.l's own file
+			 * header) since nothing here is ambiguous without it --
+			 * OID and ';' are already unmistakably distinct token
+			 * types. SPACE only needs to be a real, visible token once
+			 * inside a TAG's own remainder, where it can be a genuine
+			 * field boundary (RELATION's relname/name split) or part
+			 * of a multi-word value.
+			 */
 			item->dumpId = (int) $1;
-			item->catalogOid = (uint32_t) $4;
-			item->objectOid = (uint32_t) $6;
+			item->catalogOid = (uint32_t) $3;
+			item->objectOid = (uint32_t) $4;
 		}
 	;
 
 /*
- * owner_text is the one boundary this format encodes positionally, not
+ * owner is the one boundary this format encodes positionally, not
  * with its own keyword: an entry's owner is simply the last space-
  * delimited token on the line, or absent (a lone trailing space with
- * nothing after it). TOK_LASTWORD/TOK_NO_OWNER are flex's own $-anchored
- * twin of TOK_WORD and the ordinary "trailing space" rule -- see
+ * nothing after it). LASTWORD/NO_OWNER are flex's own $-anchored
+ * twin of WORD and the ordinary "trailing space" rule -- see
  * archive_toc_lexer.l's file header -- so this production never has to
  * look ahead past the end of the line itself; by the time either token
  * is shifted, there is nothing else left to shift.
  */
-owner_text:
-	TOK_NO_OWNER                        { $$ = strdup(""); }
-	| TOK_SPACE TOK_LASTWORD             { $$ = $2.text; }
+owner:
+	NO_OWNER                        { $$ = strdup(""); }
+	| SPACE LASTWORD             { $$ = $2.text; }
 	;
 
-namespace_field:
-	TOK_DASH                            { $$ = NULL; }
-	| TOK_WORD                          { $$ = $1.text; }
+nspname:
+	'-'                            { $$ = NULL; }
+	| WORD                          { $$ = $1.text; }
 	;
 
 /*
@@ -207,16 +235,83 @@ mark:
  * its own.
  */
 wordname:
-	TOK_WORD
+	WORD
 		{
 			$$.text = $1.text;
 			$$.end = $1.end;
 		}
-	| wordname TOK_SPACE TOK_WORD
+	| wordname SPACE WORD
 		{
 			$$.text = archiveTocJoinWords($1.text, $3.text);
 			$$.end = $3.end;
 		}
+	| wordname '.' WORD
+		{
+			/*
+			 * An opaque top-level (or NESTED_GENERIC-style) name has no
+			 * escaping convention at all (see TOCBODY's own file-header
+			 * comment on raw vs. quote-aware text), so a literal '.' in
+			 * one -- same deal as a literal '"' -- is just another
+			 * character, not the schema-qualification separator
+			 * typename's own '.' rule means. Glued directly, no
+			 * space, same as typename's.
+			 */
+			char *dotted = archiveTocConcat(strdup("."), $3.text);
+			$$.text = archiveTocConcat($1.text, dotted);
+			$$.end = $3.end;
+		}
+	;
+
+/*
+ * relname and name are for a field the previous revision kept
+ * as raw, unsplit text (no fmtId() quoting, no escaping convention at
+ * all -- see TOCBODY's own file-header comment): rather than enumerate
+ * every WORD/DOT/COMMA/LPAREN/RPAREN combination such a field could
+ * contain (a losing game -- CI's own "Sp1eCial .Char" schema name,
+ * space then dot then more text, is exactly the kind of combination
+ * wordname's own narrower, enumerated rules above don't cover), these
+ * consume a run of ANY of those tokens generically and carry only the
+ * END position of the last one consumed ($$ here is never the
+ * reconstructed text itself): the caller slices the exact source bytes
+ * out between an earlier `mark` and this value (archiveTocSlice), the
+ * same verbatim-capture idea `mark` itself exists for, rather than
+ * rebuilding the text from pieces that have already lost the original
+ * formatting. relname stops at the first SPACE (for a field that is
+ * itself only ever the first space-delimited token, e.g. RELATION's own
+ * relname); name also consumes SPACE, for a field that is
+ * whatever text remains up to the owner boundary.
+ */
+relname_item:
+	WORD                            { $$ = $1.end; }
+	| '.'                           { $$ = $1; }
+	| ','                         { $$ = $1; }
+	| '('                        { $$ = $1; }
+	| ')'                        { $$ = $1; }
+	;
+
+relname:
+	relname_item                      { $$ = $1; }
+	| relname relname_item          { $$ = $2; }
+	;
+
+/*
+ * name is relname's own counterpart allowing embedded SPACEs, built on
+ * TOP of relname (never directly on relname_item + a bare SPACE
+ * alternative): name's own first token has to be unambiguous without
+ * any lookahead, which relname already guarantees (relname_item never
+ * includes SPACE), so name can never itself START with a SPACE -- only
+ * sandwich one between two real relname chunks. That distinction is
+ * why TOP_RELATION's own explicit separator SPACE between relname and
+ * name (a real token in the input, consumed as its own grammar symbol
+ * there) doesn't collide with name's own grammar: if name could ALSO
+ * start with a bare SPACE, the one physical separator character
+ * between relname and name would be genuinely ambiguous between
+ * satisfying that explicit SPACE symbol or being absorbed as name's
+ * own leading (and semantically meaningless) one.
+ */
+name:
+	relname                          { $$ = $1; }
+	| name SPACE relname              { $$ = $3; }
 	;
 
 /*
@@ -229,10 +324,10 @@ wordname:
  * variable.
  */
 typename:
-	TOK_WORD                            { $$ = $1.text; }
-	| typename TOK_SPACE TOK_WORD        { $$ = archiveTocJoinWords($1, $3.text); }
+	WORD                            { $$ = $1.text; }
+	| typename SPACE WORD        { $$ = archiveTocJoinWords($1, $3.text); }
 	| typename paren_group               { $$ = archiveTocConcat($1, $2); }
-	| typename TOK_DOT TOK_WORD
+	| typename '.' WORD
 		{
 			char *dotted = archiveTocConcat(strdup("."), $3.text);
 			$$ = archiveTocConcat($1, dotted);
@@ -240,7 +335,7 @@ typename:
 	;
 
 paren_group:
-	TOK_LPAREN paren_inner TOK_RPAREN    { $$ = archiveTocWrapParen($2); }
+	'(' paren_inner ')'    { $$ = archiveTocWrapParen($2); }
 	;
 
 paren_inner:
@@ -249,9 +344,9 @@ paren_inner:
 	;
 
 paren_inner_item:
-	TOK_WORD                            { $$ = $1.text; }
-	| TOK_COMMA                          { $$ = strdup(","); }
-	| TOK_SPACE                          { $$ = strdup(" "); }
+	WORD                            { $$ = $1.text; }
+	| ','                          { $$ = strdup(","); }
+	| SPACE                          { $$ = strdup(" "); }
 	| paren_group                        { $$ = $1; }
 	;
 
@@ -268,6 +363,7 @@ arglist:
 		{
 			$$.items = NULL;
 			$$.count = 0;
+			$$.cap = 0;
 			$$.text = strdup("");
 		}
 	| args                               { $$ = $1; }
@@ -276,24 +372,22 @@ arglist:
 args:
 	typename
 		{
-			$$.items = (char **) calloc(1, sizeof(char *));
-			$$.items[0] = $1;
-			$$.count = 1;
+			$$.items = NULL;
+			$$.count = 0;
+			$$.cap = 0;
+			archiveTocArgListAppend(&$$, $1);
 			$$.text = strdup($1);
 		}
-	| args TOK_COMMA TOK_SPACE typename
+	| args ',' SPACE typename
 		{
 			$$ = $1;
-			$$.items = (char **) realloc($$.items,
-										  ($$.count + 1) * sizeof(char *));
-			$$.items[$$.count] = $4;
-			$$.count++;
+			archiveTocArgListAppend(&$$, $4);
 			$$.text = archiveTocAppendArg($$.text, $4);
 		}
 	;
 
 entry:
-	TOK_ACL namespace_field TOK_SPACE
+	ACL nspname SPACE
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -310,7 +404,7 @@ entry:
 			archive_toc_begin_nested_tag();
 		}
 	  nested_entry
-	| TOK_COMMENT namespace_field TOK_SPACE
+	| COMMENT nspname SPACE
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -328,7 +422,7 @@ entry:
 		}
 	  nested_entry
 
-	| TOK_TOP_SIMPLE namespace_field TOK_SPACE wordname owner_text
+	| TOP_SIMPLE nspname SPACE mark name owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -340,12 +434,13 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			archiveTocBuildSimpleNames(item, $4.text, $5);
-			free($4.text);
-			free($5);
+			char *body = archiveTocSlice($4, $5);
+			archiveTocBuildSimpleNames(item, body, $6);
+			free(body);
+			free($6);
 		}
 
-	| TOK_TOP_RELATION namespace_field TOK_SPACE mark TOK_WORD TOK_SPACE wordname owner_text
+	| TOP_RELATION nspname SPACE mark relname SPACE name owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -358,29 +453,38 @@ entry:
 			}
 
 			/*
+			 * relname/name are each sliced verbatim (see relname's own
+			 * comment) rather than reconstructed from tokens: either
+			 * can contain arbitrary punctuation with no escaping
+			 * convention at all (CI's own "Sp1eCial .Char" schema name
+			 * -- a space, then a literal dot, then more text -- is
+			 * exactly why enumerating WORD/DOT/SPACE combinations by
+			 * hand doesn't scale here).
+			 *
 			 * archiveTocBuildRelationNames's own restoreListName (the
-			 * owning relation's name only, "nspname relname owner") is
-			 * the right contract for a NESTED ACL/COMMENT entry (see
-			 * finishRelationAclOrComment's old rationale -- filtering
-			 * matches the RELATION, not the ACL/COMMENT itself), but
-			 * NOT for this top-level entry, which has no separate
-			 * "owning relation" at all: relname and name here are both
-			 * just this ONE entry's own fields (e.g. DEFAULT's own
-			 * column name), so restoreListName needs the full verbatim
-			 * body (both fields), the same as every other top-level
-			 * shape -- overridden right after, via the usual verbatim
-			 * slice ($7.end, not a trailing `mark`, for the same
-			 * reason as TOP_DEFAULT_ACL's own).
+			 * owning relation's name only) is the right contract for a
+			 * NESTED ACL/COMMENT entry (see finishRelationAclOrComment's
+			 * old rationale -- filtering matches the RELATION, not the
+			 * ACL/COMMENT itself), but NOT for this top-level entry,
+			 * which has no separate "owning relation" at all: relname
+			 * and name here are both just this ONE entry's own fields
+			 * (e.g. DEFAULT's own column name), so restoreListName
+			 * needs the full verbatim body (both fields), the same as
+			 * every other top-level shape -- overridden right after,
+			 * covering both fields at once.
 			 */
-			archiveTocBuildRelationNames(item, $5.text, $7.text, $8);
-			archiveTocOverrideRestoreListName(item, $4, $7.end, $8);
+			char *relname = archiveTocSlice($4, $5);
+			char *name = archiveTocSlice($6, $7);
 
-			free($5.text);
-			free($7.text);
+			archiveTocBuildRelationNames(item, relname, name, $8);
+			archiveTocOverrideRestoreListName(item, $4, $7, $8);
+
+			free(relname);
+			free(name);
 			free($8);
 		}
 
-	| TOK_TOP_FUNCLIKE namespace_field TOK_SPACE mark wordname TOK_LPAREN arglist TOK_RPAREN mark owner_text
+	| TOP_FUNCLIKE nspname SPACE mark wordname '(' arglist ')' mark owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -425,7 +529,7 @@ entry:
 			free($10);
 		}
 
-	| TOK_TOP_OPERATOR namespace_field TOK_SPACE TOK_WORD owner_text
+	| TOP_OPERATOR nspname SPACE WORD owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -442,24 +546,24 @@ entry:
 			free($5);
 		}
 
-	| TOK_TOP_CAST namespace_field TOK_SPACE mark TOK_WORD TOK_SPACE TOK_LPAREN typename TOK_SPACE TOK_AS TOK_SPACE typename TOK_RPAREN mark owner_text
+	| TOP_CAST nspname SPACE mark WORD SPACE '(' typename SPACE AS SPACE typename ')' mark owner
 		{
 			/*
 			 * $5 (the repeated "CAST " tag text pg_dump's own labelq
-			 * includes, see dumpCast in pg_dump.c) is a plain TOK_WORD,
+			 * includes, see dumpCast in pg_dump.c) is a plain WORD,
 			 * not wordname: unlike FUNCTION's own name, it is always
 			 * exactly this one fixed word, never multi-word -- using
 			 * wordname here anyway would make it greedily try to
 			 * extend through the space before "(" as if it might be
 			 * continuing a longer name, which LALR(1) can't walk back
-			 * out of (it would need to see one more token, TOK_WORD vs
-			 * TOK_LPAREN, before deciding whether to shift that
-			 * space). The explicit TOK_SPACE around TOK_AS matters for
+			 * out of (it would need to see one more token, WORD vs
+			 * '(', before deciding whether to shift that
+			 * space). The explicit SPACE around AS matters for
 			 * the exact same reason: without it, after the source
 			 * typename reduces, the only registered continuation for a
-			 * TOK_SPACE lookahead is typename's OWN "more words" rule,
-			 * so it shifts that space expecting another TOK_WORD and
-			 * then chokes on the real TOK_AS that follows.
+			 * SPACE lookahead is typename's OWN "more words" rule,
+			 * so it shifts that space expecting another WORD and
+			 * then chokes on the real AS that follows.
 			 */
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -484,9 +588,9 @@ entry:
 			free($15);
 		}
 
-	| TOK_TOP_TRANSFORM namespace_field TOK_SPACE mark TOK_WORD TOK_SPACE TOK_FOR TOK_SPACE typename TOK_SPACE TOK_LANGUAGE_KW TOK_SPACE TOK_WORD mark owner_text
+	| TOP_TRANSFORM nspname SPACE mark WORD SPACE FOR SPACE typename SPACE LANGUAGE_KW SPACE WORD mark owner
 		{
-			/* $5: same reasoning as TOK_TOP_CAST's own $5, above. */
+			/* $5: same reasoning as TOP_CAST's own $5, above. */
 			item->desc = $1.desc;
 			item->description = $1.text;
 			item->shape = ARCHIVE_SHAPE_OPAQUE;
@@ -511,7 +615,7 @@ entry:
 			free($15);
 		}
 
-	| TOK_TOP_USER_MAPPING namespace_field TOK_SPACE mark TOK_WORD TOK_SPACE TOK_WORD TOK_SPACE TOK_WORD TOK_SPACE TOK_SERVER_KW TOK_SPACE TOK_WORD mark owner_text
+	| TOP_USER_MAPPING nspname SPACE mark WORD SPACE WORD SPACE WORD SPACE SERVER_KW SPACE WORD mark owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -539,7 +643,7 @@ entry:
 			free($15);
 		}
 
-	| TOK_TOP_DEFAULT_ACL namespace_field TOK_SPACE mark TOK_WORD TOK_SPACE TOK_WORD TOK_SPACE TOK_FOR TOK_SPACE wordname owner_text
+	| TOP_DEFAULT_ACL nspname SPACE mark WORD SPACE WORD SPACE FOR SPACE wordname owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -556,15 +660,15 @@ entry:
 
 			/*
 			 * bodyEnd comes from wordname's own $11.end (set when its
-			 * last TOK_WORD was lexed, see archive_toc_lexer.l), not a
+			 * last WORD was lexed, see archive_toc_lexer.l), not a
 			 * trailing `mark` here: wordname's own recursive rule and
-			 * owner_text's "has an owner" rule both start with
-			 * TOK_SPACE, so a `mark` placed between them would force
-			 * bison to decide, with only the TOK_SPACE itself as
+			 * owner's "has an owner" rule both start with
+			 * SPACE, so a `mark` placed between them would force
+			 * bison to decide, with only the SPACE itself as
 			 * lookahead, whether to reduce the (always-empty) mark or
 			 * keep extending wordname -- a genuine shift/reduce
 			 * conflict LALR(1) can't resolve locally (it would need to
-			 * see one more token, TOK_WORD vs TOK_LASTWORD, to know).
+			 * see one more token, WORD vs LASTWORD, to know).
 			 * Reading the end position off wordname's own already-
 			 * captured value sidesteps the conflict entirely.
 			 */
@@ -590,7 +694,7 @@ entry:
  * one, already consumed, covers it).
  */
 nested_entry:
-	TOK_NESTED_RELATION_LIKE TOK_SPACE mark TOK_WORD mark owner_text
+	NESTED_RELATION_LIKE SPACE mark WORD mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -600,7 +704,7 @@ nested_entry:
 			free($6);
 		}
 
-	| TOK_NESTED_COLUMN TOK_SPACE mark TOK_WORD TOK_DOT TOK_WORD mark owner_text
+	| NESTED_COLUMN SPACE mark WORD '.' WORD mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -611,7 +715,7 @@ nested_entry:
 			free($8);
 		}
 
-	| TOK_NESTED_ON_RELATION TOK_SPACE mark TOK_WORD TOK_SPACE TOK_ON TOK_SPACE TOK_WORD mark owner_text
+	| NESTED_ON_RELATION SPACE mark WORD SPACE ON SPACE WORD mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -622,7 +726,7 @@ nested_entry:
 			free($10);
 		}
 
-	| TOK_NESTED_FUNCLIKE TOK_SPACE mark TOK_WORD TOK_LPAREN arglist TOK_RPAREN mark owner_text
+	| NESTED_FUNCLIKE SPACE mark WORD '(' arglist ')' mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -650,7 +754,7 @@ nested_entry:
 			free($9);
 		}
 
-	| TOK_NESTED_OPERATOR TOK_SPACE mark TOK_WORD TOK_SPACE TOK_LPAREN typename TOK_COMMA TOK_SPACE typename TOK_RPAREN mark owner_text
+	| NESTED_OPERATOR SPACE mark WORD SPACE '(' typename ',' SPACE typename ')' mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -666,7 +770,7 @@ nested_entry:
 			free($13);
 		}
 
-	| TOK_NESTED_CAST TOK_SPACE mark TOK_LPAREN typename TOK_SPACE TOK_AS TOK_SPACE typename TOK_RPAREN mark owner_text
+	| NESTED_CAST SPACE mark '(' typename SPACE AS SPACE typename ')' mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -685,7 +789,7 @@ nested_entry:
 			free($12);
 		}
 
-	| TOK_NESTED_TRANSFORM TOK_SPACE mark TOK_FOR TOK_SPACE typename TOK_SPACE TOK_LANGUAGE_KW TOK_SPACE TOK_WORD mark owner_text
+	| NESTED_TRANSFORM SPACE mark FOR SPACE typename SPACE LANGUAGE_KW SPACE WORD mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -705,7 +809,7 @@ nested_entry:
 			free($12);
 		}
 
-	| TOK_NESTED_OPCLASS_FAMILY TOK_SPACE mark wordname TOK_SPACE TOK_USING TOK_SPACE TOK_WORD mark owner_text
+	| NESTED_OPCLASS_FAMILY SPACE mark name SPACE USING SPACE WORD mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -713,22 +817,24 @@ nested_entry:
 			strlcpy(item->accessMethod, $8.text, sizeof(item->accessMethod));
 
 			/*
-			 * item->name/restoreListName use the NARROWED name ($4.text,
-			 * "USING amname" stripped), matching the previous
-			 * revision's own splitOperatorClassFamilyUsing contract --
-			 * only useListRemainder reproduces the FULL verbatim text,
-			 * "USING amname" included.
+			 * item->name/restoreListName use the NARROWED name, sliced
+			 * verbatim from before "USING amname" (matching the
+			 * previous revision's own splitOperatorClassFamilyUsing
+			 * contract) -- only useListRemainder reproduces the FULL
+			 * verbatim text, "USING amname" included.
 			 */
+			char *opclassName = archiveTocSlice($3, $4);
+
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
-									   $4.text, $10);
+									   opclassName, $10);
 			archiveTocBuildUseListRemainder(item, $3, $9, $10);
 
-			free($4.text);
+			free(opclassName);
 			free($8.text);
 			free($10);
 		}
 
-	| TOK_NESTED_EXTENSION TOK_SPACE mark TOK_WORD mark owner_text
+	| NESTED_EXTENSION SPACE mark WORD mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -753,21 +859,23 @@ nested_entry:
 			free($6);
 		}
 
-	| TOK_NESTED_GENERIC TOK_SPACE mark wordname owner_text
+	| NESTED_GENERIC SPACE mark name owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
 			/*
-			 * bodyEnd is $4.end (wordname's own end position), not a
-			 * trailing `mark` -- see TOP_DEFAULT_ACL's own comment on
-			 * why that specific placement is a genuine LALR(1)
-			 * shift/reduce conflict with wordname's own recursion.
+			 * bodyEnd is $4 (name's own end position), not a trailing
+			 * `mark` -- see TOP_DEFAULT_ACL's own comment on why that
+			 * specific placement would be a genuine LALR(1) shift/
+			 * reduce conflict with name's own recursion.
 			 */
+			char *genericName = archiveTocSlice($3, $4);
+
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
-									   $4.text, $5);
-			archiveTocBuildUseListRemainder(item, $3, $4.end, $5);
-			free($4.text);
+									   genericName, $5);
+			archiveTocBuildUseListRemainder(item, $3, $4, $5);
+			free(genericName);
 			free($5);
 		}
 	;
@@ -934,6 +1042,34 @@ archiveTocAppendArg(char *accText, char *arg)
 
 
 /*
+ * archiveTocArgListAppend appends one more argument to list->items,
+ * growing the underlying allocation 10 slots at a time (list->cap)
+ * rather than realloc()ing on every single argument: real argument
+ * lists are short, but a pathological one (hundreds of columns in a
+ * wide function signature, say) would otherwise realloc() once per
+ * argument.
+ */
+static void
+archiveTocArgListAppend(ArchiveArgList *list, char *item)
+{
+	if (list->count == list->cap)
+	{
+		list->cap += 10;
+		list->items = (char **) realloc(list->items,
+										 list->cap * sizeof(char *));
+
+		if (list->items == NULL)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return;
+		}
+	}
+
+	list->items[list->count++] = item;
+}
+
+
+/*
  * archiveTocBuildSimpleNames and archiveTocBuildRelationNames set
  * item->name/relname/owner, item->restoreListName ("nspname name
  * owner", the filtering-relevant name) and item->tagType, for a SIMPLE-
@@ -1025,7 +1161,7 @@ archiveTocBuildOpaqueNames(ArchiveContentItem *item, const char *rlNamespace,
  * archiveTocBuildUseListRemainder builds item->useListRemainder for a
  * nested ACL/COMMENT object type: "nspname objectTypeText body owner",
  * body sliced verbatim between the two marks the calling production
- * placed right after its own TAG token and right before owner_text --
+ * placed right after its own TAG token and right before owner --
  * see archive_toc_lexer.l's own file header and the `mark` nonterminal's
  * comment for why this is a byte-exact copy of the original line, not a
  * reassembly from already-split pieces (a quoted identifier round-trips
