@@ -2153,6 +2153,17 @@ pgsql_sync_pipeline(PGSQL *pgsql)
 		}
 
 		/*
+		 * The Sync came back in what we already had: there is nothing left to
+		 * wait for.  Without this the select() below runs once more, and with
+		 * no more data coming it always sits out its whole timeout, which
+		 * made every pipeline sync cost 10ms on top of the round trip.
+		 */
+		if (syncReceived)
+		{
+			break;
+		}
+
+		/*
 		 * We need to wait for the socket to be ready for reading, otherwise
 		 * select() will return immediately and we will busy loop. When
 		 * PQflush() above reported unsent output still buffered, also wait
