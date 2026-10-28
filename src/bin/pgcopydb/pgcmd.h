@@ -495,7 +495,6 @@ bool archive_iter_toc_next(ArchiveTOCIterator *iter);
 bool archive_iter_toc_finish(ArchiveTOCIterator *iter);
 
 /* archive_toc_parser.c: see the file header */
-ArchiveTocShape archive_toc_shape_for_desc(ArchiveItemDesc desc);
 bool archive_toc_parse_line(const char *line, ArchiveContentItem *item);
 
 #endif /* PGCMD_H */

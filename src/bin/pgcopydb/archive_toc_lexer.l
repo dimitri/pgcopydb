@@ -1,7 +1,7 @@
 %{
 /*
  * src/bin/pgcopydb/archive_toc_lexer.l
- *     flex lexer for the fixed-shape prefix of a pg_restore --list line:
+ *     flex lexer for a whole pg_restore --list line:
  *
  *       dumpId ';' catalogOid objectOid TAG remainder
  *
@@ -10,80 +10,68 @@
  *          te->desc, sanitized_schema, sanitized_name, sanitized_owner);
  * (PrintTOCSummary, pg_backup_archiver.c)
  *
- * This prefix -- up through and including the TAG keyword -- is the one
- * part of the line with a genuinely regular, context-free structure, so a
- * generated DFA is a clean fit (and, unlike the hand-maintained linear
- * strncmp scan it replaces, correctly prefers the longest match without
- * depending on the table being listed in a careful "longer tag before its
- * shorter prefix" order -- see e.g. "TABLE ATTACH"/"TABLE DATA" vs
- * "TABLE", or "SEQUENCE OWNED BY"/"SEQUENCE SET" vs "SEQUENCE").
+ * Earlier revisions of this file tokenized only the fixed dumpId/catalogOid/
+ * objectOid/TAG prefix and handed the rest of the line to
+ * archive_toc_parser.c as one or more opaque REMAINDER blobs, for hand-
+ * written C functions to split with strchr()/strstr(). This revision
+ * tokenizes the WHOLE line instead, one continuous token stream feeding
+ * archive_toc_grammar.y, which assembles the ArchiveContentItem directly
+ * from the tokens -- no opaque blob is ever handed back to C code to
+ * re-split.
  *
- * The remainder after the TAG is mostly NOT tokenized here: its shape
- * depends on which tag it follows (see ArchiveTocShape, pgcmd.h), which is
- * exactly the part of the format that is genuinely irregular from one tag
- * to the next, not a parsing problem a grammar disciplines away. Once a
- * TAG is recognized, the lexer switches to the REMAINDER start condition,
- * which matches the rest of the line verbatim in one token for
- * archive_toc_parser.c's shape-table-driven parser to split.
+ * Three things make that possible:
  *
- * One exception: when this lexer is re-entered to recognize the object
- * type inside an ACL or COMMENT entry's remainder (see
- * archive_toc_lex_object_type_line), and that object type is one that owns
- * an identifier of its own -- a relation, column, constraint, trigger,
- * policy or rule name -- that name can be double-quoted by pg_dump's
- * fmtId(), which genuinely is lexical work (unescaping a quoted token),
- * not a shape-splitting one. So the object type's own remainder switches
- * to the OBJTYPEBODY start condition instead, which tokenizes it properly:
- * IDENT (plain or double-quoted, mirroring scan.l's <xd> state for quoted
- * identifiers), DOT, and the two literal markers the "name ON relname"
- * shape and its "ON DOMAIN" exclusion need, ON and DOMAIN. The owner field
- * that can follow is, like everywhere else in this format, never escaped
- * or quoted, so it's still grabbed as one raw REMAINDER token (via
- * archive_toc_begin_remainder) rather than tokenized.
+ * 1. Every TAG keyword (dumpId's own ACL/COMMENT/TABLE/FUNCTION/CAST/...)
+ *    is matched exactly once, by the same INITIAL ruleset below, whether
+ *    it's the line's own outer tag or (for an ACL/COMMENT entry) the
+ *    object type nested inside its remainder: the grammar re-enters
+ *    INITIAL for the latter via a mid-rule action (archive_toc_begin_
+ *    nested_tag, called right after ACL/COMMENT's own "- " or "nspname "
+ *    is shifted), toggling archive_toc_nested_mode so the SAME matched
+ *    keyword text maps to a different (nested-shaped) token -- see
+ *    archive_toc_tag_token.
  *
- * A second exception within the first: FUNCTION, PROCEDURE, AGGREGATE and
- * OPERATOR also own an identifier (OBJTYPEBODY, same as above), but it's
- * immediately followed by its own balanced-parentheses argument list (an
- * operator's operand types, or a function's own argument list -- see
- * archive_toc_parser.c's naming note on why we go no further than that
- * raw text). Recognizing where that group ends genuinely is lexical work
- * too, exactly the kind flex is built for: a nested pair from a type's own
- * typmod ("numeric(10,2)") isn't the end of the group, so OBJTYPEBODY's
- * own "(" rule switches to the OBJTYPEARGS start condition, which counts
- * paren depth across possibly several matches and returns the whole group
- * (parentheses excluded) as one ARCHIVE_TOC_TOKEN_ARGS token once depth
- * returns to zero.
+ * 2. Everything after a tag keyword -- a relation/function/type name, an
+ *    argument list, a CAST's two type names, and so on -- is tokenized
+ *    uniformly by the TOCBODY start condition below into WORD (one
+ *    space-delimited run, or one double-quoted, fmtId()-unescaped
+ *    identifier), a handful of literal keywords this format's own
+ *    further-structured shapes use as fixed separators (AS, FOR,
+ *    LANGUAGE, SERVER, USING, ON, DOMAIN), and the structural punctuation
+ *    (parentheses, comma, dot) a function's own balanced argument list or
+ *    a qualified name needs. archive_toc_grammar.y's own productions --
+ *    not any string-splitting here or in archive_toc_parser.c -- decide
+ *    how many WORDs make up one field (a multi-word, never-quoted name
+ *    like FUNCTION's own tag text can run to several) and recognize a
+ *    nested parenthesized group (a type's own typmod) by ordinary
+ *    grammar recursion, not a hand-counted depth variable.
  *
- * Five more shapes -- CAST's "(source AS target)", TRANSFORM's "FOR type
- * LANGUAGE language", USER MAPPING's "user SERVER server", DEFAULT ACL's
- * "FOR objecttype", and an OPERATOR CLASS/FAMILY ACL/COMMENT's "name USING
- * amname" -- are, the same way, genuinely regular rather than irregular:
- * each is a fixed sequence of (possibly multi-word) text around one or two
- * fixed literal keywords, no two of these shapes alike but none of them
- * recursive either. So each gets its own start condition (CASTBODY,
- * TRANSFORMBODY, USERMAPPINGBODY, DEFAULTACLBODY, OPCLASSBODY) entered
- * directly by its own archive_toc_lex_*_body() entry point (declared in
- * archive_toc_lexer.h) rather than via a TAG match: the caller already
- * knows which shape it has (see archive_toc_parser.c's
- * applyTopLevelSignatureExtras and parseAclOrCommentRemainder), there is no
- * object-type keyword of its own to recognize first. All five share the
- * same two kinds of rules: one literal pattern per keyword (with its
- * surrounding single space baked in, e.g. " AS ", " LANGUAGE ", so it
- * out-competes the generic word rule on length exactly where it needs to,
- * see below) and a generic ARCHIVE_TOC_TOKEN_WORD for one space-delimited
- * run of anything else, accumulated by the caller across possibly several
- * WORD tokens in a row (a multi-word type name, e.g. "double precision")
- * until the next keyword token ends the run -- the same accumulate-until-
- * the-boundary idiom OBJTYPEARGS already uses for a balanced-parens group,
- * one level simpler since there is no nesting to track here, only a fixed
- * keyword to stop at. This relies on the generic word rule ([^() ]+ or
- * [^ ]+, never matching a space itself) always losing the longest-match
- * tie to a keyword literal at the one spot the keyword can actually occur
- * -- exactly the same risk profile pg_dump's own identifiers practically
- * never trigger that archive_toc_parser.c's marker-based string splitting
- * already relied on before this (CAST/TRANSFORM/OPERATOR CLASS/FAMILY's "
- * USING "); this only moves that same assumption into the lexer's own
- * token definitions instead of leaving it as ad hoc strstr() calls.
+ * 3. The one genuinely lexical fact this format encodes positionally
+ *    rather than with its own keyword -- the owner field, which is simply
+ *    the LAST space-delimited token on the line (or absent, marked by a
+ *    lone trailing space with nothing after it) -- is resolved by flex's
+ *    own end-of-buffer anchor ($): TOCBODY's word rule and its "trailing
+ *    space" rule each have a $-anchored twin (LASTWORD, NO_OWNER) that
+ *    only matches at the true end of the scanned buffer, which
+ *    archive_toc_lex_line (below) arranges for by appending a '\n' before
+ *    scanning -- flex's $ needs a real line ending to anchor against,
+ *    verified empirically: yy_scan_string on a string with no trailing
+ *    '\n' never triggers a $-anchored rule, no matter how the buffer
+ *    actually ends. This makes the owner boundary a property the LEXER
+ *    discovers as it goes, not something any caller pre-scans for.
+ *
+ * Every token that carries a value (TOK_OID's number, a tag keyword's
+ * ArchiveItemDesc, a WORD's text) sets it in archive_toc_lval -- bison's
+ * own per-token value slot, copied onto its parse stack the moment the
+ * token is shifted -- rather than in a plain global a grammar action
+ * might read later: bison's LALR engine can pull the NEXT token (to
+ * decide whether to shift or reduce) before running a reduce action for
+ * tokens already shifted, so a plain global set by this lexer would get
+ * overwritten by that lookahead before anything downstream read it.
+ * archive_toc_word below is not that -- it is this lexer's OWN, purely
+ * internal accumulator for a double-quoted identifier being matched
+ * across possibly several TOCQIDENT rules, copied into archive_toc_lval
+ * only once, right when that one token is finished and returned.
  */
 
 #include <stdlib.h>
@@ -94,18 +82,43 @@
 #include "pgcmd.h"
 #include "string_utils.h"
 #include "archive_toc_lexer.h"
+#include "archive_toc_grammar.h"
 
 static int archive_toc_tag_token(ArchiveItemDesc desc);
-static int archive_toc_object_type_word_token(void);
-static int archive_toc_word_token(void);
-static bool archive_toc_object_type_has_ident(ArchiveItemDesc desc);
+static int archive_toc_word_or_keyword_token(bool isLast);
 static void archive_toc_ident_append(const char *s, int len);
-static void archive_toc_args_append(const char *s, int len);
 
-/* used directly in the OBJTYPEBODY/OBJTYPEARGS rule actions below, so,
- * unlike archive_toc_object_type_mode, it must be declared up here in
- * the prologue rather than down in the trailing user-code section */
-static int archive_toc_args_depth = 0;
+/* purely an internal multi-match accumulator, see the file header */
+static char archive_toc_word[BUFSIZE];
+
+/*
+ * archive_toc_token_start/archive_toc_token_end bracket the text of
+ * whichever token archive_toc_lex() just matched, as raw pointers into
+ * flex's own stable internal scan buffer (the one yy_scan_string
+ * allocates and keeps for as long as the current line's scan lasts,
+ * not the caller's own copy, see archive_toc_lex_line below). YY_USER_
+ * ACTION runs this before EVERY rule's own action, in every start
+ * condition, with no per-rule code needed.
+ *
+ * archive_toc_grammar.y's own `mark` nonterminal (a zero-width mid-rule
+ * placeholder) reads archive_toc_token_end at specific, fixed points in
+ * a production -- right after the last token of a span it wants to
+ * capture verbatim -- to slice that exact source text out, byte for
+ * byte, rather than reassembling it from already-tokenized pieces (see
+ * archive_toc_grammar.y's own file header on why: an already-split
+ * piece has lost the original formatting -- exact spacing, a nested
+ * typmod's own parentheses, ... -- a hand-rebuilt sformat() has to
+ * guess back). Safe to read only from a mid-rule action positioned
+ * immediately after the token it means to mark -- see `mark`'s own
+ * comment for why reading it from an ordinary (end-of-rule) action
+ * would not be.
+ */
+const char *archive_toc_token_start;
+const char *archive_toc_token_end;
+
+#define YY_USER_ACTION \
+	archive_toc_token_start = yytext; \
+	archive_toc_token_end = yytext + yyleng;
 
 %}
 
@@ -115,26 +128,18 @@ static int archive_toc_args_depth = 0;
 %option noinput
 %option never-interactive
 
-%x REMAINDER
-%x OBJTYPEBODY
-%x OBJTYPEQIDENT
-%x OBJTYPEARGS
-%x CASTBODY
-%x TRANSFORMBODY
-%x USERMAPPINGBODY
-%x DEFAULTACLBODY
-%x OPCLASSBODY
-%x FUNCSIGBODY
+%x NAMESPACE
+%x TOCBODY
+%x TOCQIDENT
 
 %%
 
 <INITIAL>{
 
-[0-9]+                            { archive_toc_last_oid = strtoull(yytext, NULL, 10);
-                                     return ARCHIVE_TOC_TOKEN_OID; }
-";"                                { return ARCHIVE_TOC_TOKEN_SEMICOLON; }
-" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
-"-"                                { return ARCHIVE_TOC_TOKEN_DASH; }
+[0-9]+                            { archive_toc_lval.oid = strtoull(yytext, NULL, 10);
+                                     return TOK_OID; }
+";"                                { return TOK_SEMICOLON; }
+" "+                               { return TOK_SPACE; }
 
 "ACCESS METHOD"                   { return archive_toc_tag_token(ARCHIVE_TAG_ACCESS_METHOD); }
 "ACL"                             { return archive_toc_tag_token(ARCHIVE_TAG_ACL); }
@@ -199,429 +204,356 @@ static int archive_toc_args_depth = 0;
 "USER MAPPING"                    { return archive_toc_tag_token(ARCHIVE_TAG_USER_MAPPING); }
 "VIEW"                            { return archive_toc_tag_token(ARCHIVE_TAG_VIEW); }
 
-.                                  { return ARCHIVE_TOC_TOKEN_UNKNOWN; }
+.                                  { return TOK_UNKNOWN; }
 
 }
 
-<REMAINDER>{
+<NAMESPACE>{
 
-.*                                 { BEGIN(INITIAL); return ARCHIVE_TOC_TOKEN_REMAINDER; }
-
-}
-
-<OBJTYPEBODY>{
-
-" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
-"."                                { return ARCHIVE_TOC_TOKEN_DOT; }
-
-\"                                 { BEGIN(OBJTYPEQIDENT);
-                                     archive_toc_ident[0] = '\0';
-                                     archive_toc_ident_quoted = true; }
-
-"("                                { BEGIN(OBJTYPEARGS);
-                                     archive_toc_args_depth = 1;
-                                     archive_toc_args[0] = '\0'; }
-
-[^\" .(]+                          { return archive_toc_object_type_word_token(); }
+"-"                                { BEGIN(TOCBODY); return TOK_DASH; }
+[^ \n]+                            { BEGIN(TOCBODY);
+                                     archive_toc_lval.word.text = strdup(yytext);
+                                     archive_toc_lval.word.quoted = false;
+                                     archive_toc_lval.word.end = archive_toc_token_end;
+                                     return TOK_WORD; }
 
 }
 
-<OBJTYPEQIDENT>{
+<TOCBODY>{
+
+" "+$                              { return TOK_NO_OWNER; }
+" "+                               { return TOK_SPACE; }
+
+\"                                 { BEGIN(TOCQIDENT);
+                                     archive_toc_word[0] = '\0'; }
+
+"("                                { return TOK_LPAREN; }
+")"                                { return TOK_RPAREN; }
+","                                { return TOK_COMMA; }
+"."                                { return TOK_DOT; }
+
+[^ ().,\"\n]+$                     { return archive_toc_word_or_keyword_token(true); }
+[^ ().,\"\n]+                      { return archive_toc_word_or_keyword_token(false); }
+
+}
+
+<TOCQIDENT>{
 
 \"\"                               { archive_toc_ident_append("\"", 1); }
-\"                                 { BEGIN(OBJTYPEBODY);
-                                     return ARCHIVE_TOC_TOKEN_IDENT; }
-[^\"]+                             { archive_toc_ident_append(yytext, yyleng); }
+\"                                 { BEGIN(TOCBODY);
+                                     archive_toc_lval.word.text = strdup(archive_toc_word);
+                                     archive_toc_lval.word.quoted = true;
+                                     archive_toc_lval.word.end = archive_toc_token_end;
+                                     return TOK_WORD; }
+[^\"\n]+                           { archive_toc_ident_append(yytext, yyleng); }
 
 }
 
-<OBJTYPEARGS>{
-
-"("                                { archive_toc_args_depth++;
-                                     archive_toc_args_append(yytext, yyleng); }
-
-")"                                { archive_toc_args_depth--;
-                                     if (archive_toc_args_depth == 0)
-                                     {
-                                         BEGIN(OBJTYPEBODY);
-                                         return ARCHIVE_TOC_TOKEN_ARGS;
-                                     }
-                                     archive_toc_args_append(yytext, yyleng); }
-
-[^()]+                             { archive_toc_args_append(yytext, yyleng); }
-
-}
-
-<CASTBODY>{
-
-"("                                { /* no token: caller doesn't need it */ }
-")"                                { return ARCHIVE_TOC_TOKEN_RPAREN; }
-" AS "                             { return ARCHIVE_TOC_TOKEN_AS; }
-" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
-[^() ]+                            { return archive_toc_word_token(); }
-
-}
-
-<TRANSFORMBODY>{
-
-"FOR "                             { return ARCHIVE_TOC_TOKEN_FOR; }
-" LANGUAGE "                       { return ARCHIVE_TOC_TOKEN_LANGUAGE_KW; }
-" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
-[^ ]+                              { return archive_toc_word_token(); }
-
-}
-
-<USERMAPPINGBODY>{
-
-" SERVER "                         { return ARCHIVE_TOC_TOKEN_SERVER_KW; }
-" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
-[^ ]+                              { return archive_toc_word_token(); }
-
-}
-
-<DEFAULTACLBODY>{
-
-"FOR "                             { return ARCHIVE_TOC_TOKEN_FOR; }
-" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
-[^ ]+                              { return archive_toc_word_token(); }
-
-}
-
-<OPCLASSBODY>{
-
-" USING "                          { return ARCHIVE_TOC_TOKEN_USING; }
-" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
-[^ ]+                              { return archive_toc_word_token(); }
-
-}
-
-<FUNCSIGBODY>{
-
-"("                                { BEGIN(OBJTYPEARGS);
-                                     archive_toc_args_depth = 1;
-                                     archive_toc_args[0] = '\0'; }
-
-[^(]+                              { strlcpy(archive_toc_ident, yytext,
-                                             sizeof(archive_toc_ident));
-                                     archive_toc_ident_quoted = false;
-                                     return ARCHIVE_TOC_TOKEN_IDENT; }
-
-}
-
-<<EOF>>                            { return ARCHIVE_TOC_TOKEN_EOF; }
+<<EOF>>                            { return TOK_EOF; }
 
 %%
 
 /*
- * archive_toc_tag_token switches the lexer to the REMAINDER start
- * condition (the text after a TAG is not otherwise tokenized) -- except
- * when scanning an object type (see archive_toc_lex_object_type_line)
- * that owns an identifier of its own, which switches to OBJTYPEBODY
- * instead, so that identifier can be unescaped properly. Either way,
- * returns a single ARCHIVE_TOC_TOKEN_DESC token; the specific
- * ArchiveItemDesc is left in archive_toc_last_desc for the caller to read
- * (flex's generated yylex() returns only an int, so this is the same
- * out-of-band-value idiom the grammar needs for the OID token's parsed
- * value too -- see archive_toc_last_oid in archive_toc_lexer.h).
+ * archive_toc_tag_token classifies a just-matched tag keyword into the
+ * bison token for its own shape, which differs depending on whether this
+ * keyword is the line's own outer tag or (archive_toc_nested_mode true)
+ * the object type nested inside an ACL/COMMENT entry's remainder -- see
+ * the file header and archive_toc_begin_nested_tag below. Either way,
+ * archive_toc_lval.tag is set so the grammar action that consumes this
+ * token can read the specific ArchiveItemDesc and its literal keyword
+ * text straight off bison's own parse stack, into item->desc/description
+ * or item->objectType/objectTypeText.
+ *
+ * ACL and COMMENT themselves switch to NAMESPACE (their own outer
+ * namespace field, exactly like every other top-level tag); every other
+ * top-level tag does too. A nested object type never has a namespace of
+ * its own (the ACL/COMMENT's own one already covers it), so it goes
+ * straight to TOCBODY instead.
  */
-ArchiveItemDesc archive_toc_last_desc;
-uint64_t archive_toc_last_oid;
-char archive_toc_last_desc_text[BUFSIZE];
-char archive_toc_ident[PG_NAMEDATALEN];
-bool archive_toc_ident_quoted;
-char archive_toc_args[BUFSIZE];
-char archive_toc_word[BUFSIZE];
-
-static bool archive_toc_object_type_mode = false;
-
-static bool
-archive_toc_object_type_has_ident(ArchiveItemDesc desc)
-{
-	switch (desc)
-	{
-		case ARCHIVE_TAG_TABLE:
-		case ARCHIVE_TAG_VIEW:
-		case ARCHIVE_TAG_MATERIALIZED_VIEW:
-		case ARCHIVE_TAG_FOREIGN_TABLE:
-		case ARCHIVE_TAG_INDEX:
-		case ARCHIVE_TAG_SEQUENCE:
-		case ARCHIVE_TAG_COLUMN:
-		case ARCHIVE_TAG_CONSTRAINT:
-		case ARCHIVE_TAG_TRIGGER:
-		case ARCHIVE_TAG_POLICY:
-		case ARCHIVE_TAG_RULE:
-		case ARCHIVE_TAG_FUNCTION:
-		case ARCHIVE_TAG_PROCEDURE:
-		case ARCHIVE_TAG_AGGREGATE:
-		case ARCHIVE_TAG_OPERATOR:
-		{
-			return true;
-		}
-
-		default:
-		{
-			return false;
-		}
-	}
-}
-
+static bool archive_toc_nested_mode = false;
 
 static int
 archive_toc_tag_token(ArchiveItemDesc desc)
 {
-	archive_toc_last_desc = desc;
-	strlcpy(archive_toc_last_desc_text, yytext,
-			sizeof(archive_toc_last_desc_text));
+	archive_toc_lval.tag.desc = desc;
+	archive_toc_lval.tag.text = strdup(yytext);
 
-	if (archive_toc_object_type_mode && archive_toc_object_type_has_ident(desc))
+	if (!archive_toc_nested_mode)
 	{
-		BEGIN(OBJTYPEBODY);
+		BEGIN(NAMESPACE);
+
+		switch (desc)
+		{
+			case ARCHIVE_TAG_ACL:
+			{
+				return TOK_ACL;
+			}
+
+			case ARCHIVE_TAG_COMMENT:
+			{
+				return TOK_COMMENT;
+			}
+
+			case ARCHIVE_TAG_FUNCTION:
+			case ARCHIVE_TAG_PROCEDURE:
+			case ARCHIVE_TAG_AGGREGATE:
+			{
+				return TOK_TOP_FUNCLIKE;
+			}
+
+			case ARCHIVE_TAG_OPERATOR:
+			{
+				return TOK_TOP_OPERATOR;
+			}
+
+			case ARCHIVE_TAG_CAST:
+			{
+				return TOK_TOP_CAST;
+			}
+
+			case ARCHIVE_TAG_TRANSFORM:
+			{
+				return TOK_TOP_TRANSFORM;
+			}
+
+			case ARCHIVE_TAG_USER_MAPPING:
+			{
+				return TOK_TOP_USER_MAPPING;
+			}
+
+			case ARCHIVE_TAG_DEFAULT_ACL:
+			{
+				return TOK_TOP_DEFAULT_ACL;
+			}
+
+			case ARCHIVE_TAG_ATTRDEF:
+			case ARCHIVE_TAG_CHECK_CONSTRAINT:
+			case ARCHIVE_TAG_CONSTRAINT:
+			case ARCHIVE_TAG_DEFAULT:
+			case ARCHIVE_TAG_FK_CONSTRAINT:
+			case ARCHIVE_TAG_INDEX_ATTACH:
+			case ARCHIVE_TAG_POLICY:
+			case ARCHIVE_TAG_PUBLICATION_TABLES_IN_SCHEMA:
+			case ARCHIVE_TAG_PUBLICATION_TABLE:
+			case ARCHIVE_TAG_RULE:
+			case ARCHIVE_TAG_TABLE_ATTACH:
+			case ARCHIVE_TAG_TRIGGER:
+			{
+				return TOK_TOP_RELATION;
+			}
+
+			default:
+			{
+				return TOK_TOP_SIMPLE;
+			}
+		}
 	}
 	else
 	{
-		BEGIN(REMAINDER);
-	}
+		BEGIN(TOCBODY);
 
-	return ARCHIVE_TOC_TOKEN_DESC;
-}
+		switch (desc)
+		{
+			case ARCHIVE_TAG_TABLE:
+			case ARCHIVE_TAG_VIEW:
+			case ARCHIVE_TAG_MATERIALIZED_VIEW:
+			case ARCHIVE_TAG_FOREIGN_TABLE:
+			case ARCHIVE_TAG_INDEX:
+			case ARCHIVE_TAG_SEQUENCE:
+			{
+				return TOK_NESTED_RELATION_LIKE;
+			}
 
+			case ARCHIVE_TAG_COLUMN:
+			{
+				return TOK_NESTED_COLUMN;
+			}
 
-/*
- * archive_toc_object_type_word_token classifies a plain (unquoted) word
- * matched in OBJTYPEBODY: either one of the two literal markers the
- * "name ON relname" shape and its "ON DOMAIN" exclusion need (ON, DOMAIN),
- * or a plain identifier. Mirrors scan.l's own approach of matching a
- * generic word first and classifying it against a keyword set afterward,
- * rather than relying on flex's longest-match/rule-order tie-breaking
- * between a literal keyword rule and a generic identifier rule -- the
- * exact kind of declaration-order hazard this lexer exists to get rid of.
- */
-static int
-archive_toc_object_type_word_token(void)
-{
-	if (streq(yytext, "ON"))
-	{
-		return ARCHIVE_TOC_TOKEN_ON;
-	}
+			case ARCHIVE_TAG_EXTENSION:
+			{
+				return TOK_NESTED_EXTENSION;
+			}
 
-	if (streq(yytext, "DOMAIN"))
-	{
-		return ARCHIVE_TOC_TOKEN_DOMAIN;
-	}
+			case ARCHIVE_TAG_CONSTRAINT:
+			case ARCHIVE_TAG_TRIGGER:
+			case ARCHIVE_TAG_POLICY:
+			case ARCHIVE_TAG_RULE:
+			{
+				return TOK_NESTED_ON_RELATION;
+			}
 
-	strlcpy(archive_toc_ident, yytext, sizeof(archive_toc_ident));
-	archive_toc_ident_quoted = false;
+			case ARCHIVE_TAG_FUNCTION:
+			case ARCHIVE_TAG_PROCEDURE:
+			case ARCHIVE_TAG_AGGREGATE:
+			{
+				return TOK_NESTED_FUNCLIKE;
+			}
 
-	return ARCHIVE_TOC_TOKEN_IDENT;
-}
+			case ARCHIVE_TAG_OPERATOR:
+			{
+				return TOK_NESTED_OPERATOR;
+			}
 
+			case ARCHIVE_TAG_CAST:
+			{
+				return TOK_NESTED_CAST;
+			}
 
-/*
- * archive_toc_word_token is CASTBODY/TRANSFORMBODY/USERMAPPINGBODY/
- * DEFAULTACLBODY/OPCLASSBODY's generic word rule's action: there is no
- * keyword to classify a match against here (each of those five states has
- * its own dedicated literal rule for its own keyword(s) already, see the
- * file header), so this just hands the matched word back to the caller as
- * archive_toc_word.
- */
-static int
-archive_toc_word_token(void)
-{
-	strlcpy(archive_toc_word, yytext, sizeof(archive_toc_word));
+			case ARCHIVE_TAG_TRANSFORM:
+			{
+				return TOK_NESTED_TRANSFORM;
+			}
 
-	return ARCHIVE_TOC_TOKEN_WORD;
-}
+			case ARCHIVE_TAG_OPERATOR_CLASS:
+			case ARCHIVE_TAG_OPERATOR_FAMILY:
+			{
+				return TOK_NESTED_OPCLASS_FAMILY;
+			}
 
-
-/*
- * archive_toc_ident_append appends to archive_toc_ident, the accumulator
- * for a double-quoted identifier being scanned across possibly several
- * OBJTYPEQIDENT matches (plain runs of non-quote characters, and one
- * single escaped quote per "" match) -- the same role litbuf/addlit play
- * in scan.l's own <xd> state.
- */
-static void
-archive_toc_ident_append(const char *s, int len)
-{
-	size_t curLen = strlen(archive_toc_ident);
-
-	if (curLen + len >= sizeof(archive_toc_ident))
-	{
-		len = sizeof(archive_toc_ident) - curLen - 1;
-	}
-
-	if (len > 0)
-	{
-		memcpy(archive_toc_ident + curLen, s, len);
-		archive_toc_ident[curLen + len] = '\0';
+			default:
+			{
+				return TOK_NESTED_GENERIC;
+			}
+		}
 	}
 }
 
 
 /*
- * archive_toc_args_append appends to archive_toc_args, the accumulator for
- * a FUNCTION/PROCEDURE/AGGREGATE/OPERATOR's own balanced-parentheses
- * argument list being scanned across possibly several OBJTYPEARGS matches
- * -- mirrors archive_toc_ident_append's role for a quoted identifier, one
- * level up (bytes making up the args text as a whole, not a single quoted
- * token within it; OBJTYPEARGS does not itself unescape quoting inside an
- * argument's own type name, if any -- see the file header).
- */
-static void
-archive_toc_args_append(const char *s, int len)
-{
-	size_t curLen = strlen(archive_toc_args);
-
-	if (curLen + len >= sizeof(archive_toc_args))
-	{
-		len = sizeof(archive_toc_args) - curLen - 1;
-	}
-
-	if (len > 0)
-	{
-		memcpy(archive_toc_args + curLen, s, len);
-		archive_toc_args[curLen + len] = '\0';
-	}
-}
-
-
-/*
- * archive_toc_begin_remainder switches the lexer to the REMAINDER start
- * condition without matching a TAG first, so a caller that has just
- * finished parsing some structured prefix of the current scan buffer
- * (the object type's own identifier(s), see parseAclOrCommentRemainder in
- * archive_toc_parser.c) can grab everything left as one raw token. This
- * is how the owner field is captured: like everywhere else in this
- * format, it is never itself escaped or quoted, so there is nothing for
- * OBJTYPEBODY's identifier-aware tokenizing to do with it.
+ * archive_toc_begin_nested_tag is the mid-rule action archive_toc_
+ * grammar.y calls right after shifting an ACL/COMMENT entry's own outer
+ * "- " or "nspname " (see the file header): it switches back to INITIAL
+ * so the next tag-keyword match is the object type nested inside the
+ * remainder, and flags archive_toc_tag_token to classify it into one of
+ * the NESTED_* tokens instead of a TOP_* one.
  */
 void
-archive_toc_begin_remainder(void)
+archive_toc_begin_nested_tag(void)
 {
-	BEGIN(REMAINDER);
-}
-
-
-/*
- * archive_toc_lex_line and archive_toc_lex_object_type_line scan exactly
- * one line (no trailing newline expected or required) or, for the latter,
- * one object-type substring, ready for the caller to pull tokens from
- * with repeated archive_toc_lex() calls. Both free the previous scan's
- * buffer, if any -- yy_scan_string allocates a fresh one every call, and
- * a TOC can have many thousands of lines. BEGIN(INITIAL) resets the start
- * condition so a previous scan's dangling REMAINDER/OBJTYPEBODY/
- * OBJTYPEQIDENT state (there shouldn't be one, since a well-formed scan
- * always ends on its own REMAINDER token, but a malformed one could in
- * principle stop early) can never leak into the next call.
- *
- * The two differ only in archive_toc_object_type_mode, which
- * archive_toc_tag_token reads to decide whether a matched TAG owning its
- * own identifier should switch to OBJTYPEBODY (tokenized) instead of
- * REMAINDER (raw) -- see there.
- */
-static YY_BUFFER_STATE archive_toc_buffer;
-
-static void
-archive_toc_lex_start(const char *line, bool objectTypeMode)
-{
-	if (archive_toc_buffer != NULL)
-	{
-		archive_toc__delete_buffer(archive_toc_buffer);
-	}
-
-	archive_toc_object_type_mode = objectTypeMode;
-	archive_toc_buffer = archive_toc__scan_string(line);
+	archive_toc_nested_mode = true;
 	BEGIN(INITIAL);
 }
 
 
-void
-archive_toc_lex_line(const char *line)
+/*
+ * archive_toc_word_or_keyword_token classifies a plain (unquoted) run of
+ * non-space, non-structural characters matched in TOCBODY: either one of
+ * the handful of literal keywords CAST/TRANSFORM/USER MAPPING/DEFAULT
+ * ACL/an OPERATOR CLASS or FAMILY's ACL/COMMENT form/a relation-owned
+ * object type's "ON relname" use as their own fixed separator (AS, FOR,
+ * LANGUAGE, SERVER, USING, ON, DOMAIN), or a generic word -- mirrors the
+ * previous revision's archive_toc_object_type_word_token, same rationale
+ * (classify first, same risk profile as scan.l's own generic-word-then-
+ * classify approach: a real identifier spelled exactly "AS" or "SERVER"
+ * would be misread, but every one of these is a reserved SQL keyword, so
+ * an unquoted identifier can never actually be exactly one of them; a
+ * literal name that needed quoting for this reason would come through
+ * TOCQIDENT instead, never reaching this rule at all).
+ *
+ * isLast (true only for the $-anchored twin of this rule, see the file
+ * header) distinguishes TOK_LASTWORD from plain TOK_WORD for the generic
+ * case -- the grammar's own owner-boundary rule, not anything this
+ * function decides.
+ */
+static int
+archive_toc_word_or_keyword_token(bool isLast)
 {
-	archive_toc_lex_start(line, false);
-}
+	static const struct
+	{
+		const char *word;
+		int token;
+	} keywords[] = {
+		{ "AS", TOK_AS },
+		{ "FOR", TOK_FOR },
+		{ "LANGUAGE", TOK_LANGUAGE_KW },
+		{ "SERVER", TOK_SERVER_KW },
+		{ "USING", TOK_USING },
+		{ "ON", TOK_ON },
+		{ "DOMAIN", TOK_DOMAIN }
+	};
 
+	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++)
+	{
+		if (streq(yytext, keywords[i].word))
+		{
+			return keywords[i].token;
+		}
+	}
 
-void
-archive_toc_lex_object_type_line(const char *line)
-{
-	archive_toc_lex_start(line, true);
+	archive_toc_lval.word.text = strdup(yytext);
+	archive_toc_lval.word.quoted = false;
+	archive_toc_lval.word.end = archive_toc_token_end;
+
+	return isLast ? TOK_LASTWORD : TOK_WORD;
 }
 
 
 /*
- * archive_toc_scan_text is archive_toc_lex_start's Phase 4 counterpart:
- * the five further-structured shapes it serves (see the file header) have
- * no TAG keyword of their own left to match -- the caller already knows
- * which shape it has -- so there is no archive_toc_object_type_mode
- * decision to make here, just arm the matching start condition directly.
+ * archive_toc_ident_append appends to archive_toc_word, this lexer's own
+ * internal accumulator for a double-quoted identifier being scanned
+ * across possibly several TOCQIDENT matches (plain runs of non-quote
+ * characters, and one single escaped quote per "" match) -- the same
+ * role litbuf/addlit play in scan.l's own <xd> state. Never read by any
+ * grammar action directly, see the file header -- only copied into
+ * archive_toc_lval, once, by the rule that closes the quote.
  */
 static void
-archive_toc_scan_text(const char *text, int state)
+archive_toc_ident_append(const char *s, int len)
+{
+	size_t curLen = strlen(archive_toc_word);
+
+	if (curLen + len >= sizeof(archive_toc_word))
+	{
+		len = sizeof(archive_toc_word) - curLen - 1;
+	}
+
+	if (len > 0)
+	{
+		memcpy(archive_toc_word + curLen, s, len);
+		archive_toc_word[curLen + len] = '\0';
+	}
+}
+
+
+/*
+ * archive_toc_lex_line scans exactly one line (no trailing newline
+ * expected in `line` itself) ready for the caller (archive_toc_parser.c)
+ * to parse with archive_toc_parse() (archive_toc_grammar.y's generated
+ * yyparse(), which pulls tokens by calling archive_toc_lex() itself).
+ * Frees the previous scan's buffer first, if any -- yy_scan_string
+ * allocates a fresh one every call, and a TOC can have many thousands of
+ * lines. BEGIN(INITIAL) and resetting archive_toc_nested_mode reset
+ * state a previous, possibly malformed scan could have left dangling.
+ *
+ * The '\n' appended before scanning is not part of the real line (which
+ * never has one by the time it reaches here, see archive_iter_toc) --
+ * it's there purely so TOCBODY's $-anchored rules (see the file header)
+ * have a real end-of-line to anchor against.
+ */
+static YY_BUFFER_STATE archive_toc_buffer;
+
+void
+archive_toc_lex_line(const char *line)
 {
 	if (archive_toc_buffer != NULL)
 	{
 		archive_toc__delete_buffer(archive_toc_buffer);
 	}
 
-	archive_toc_buffer = archive_toc__scan_string(text);
-	BEGIN(state);
-}
+	size_t bytes = strlen(line) + 2;
+	char *withNewline = (char *) malloc(bytes);
 
+	if (withNewline == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return;
+	}
 
-void
-archive_toc_lex_cast_body(const char *text)
-{
-	archive_toc_scan_text(text, CASTBODY);
-}
+	sformat(withNewline, bytes, "%s\n", line);
 
+	archive_toc_nested_mode = false;
+	archive_toc_buffer = archive_toc__scan_string(withNewline);
+	BEGIN(INITIAL);
 
-void
-archive_toc_lex_transform_body(const char *text)
-{
-	archive_toc_scan_text(text, TRANSFORMBODY);
-}
-
-
-void
-archive_toc_lex_user_mapping_body(const char *text)
-{
-	archive_toc_scan_text(text, USERMAPPINGBODY);
-}
-
-
-void
-archive_toc_lex_default_acl_body(const char *text)
-{
-	archive_toc_scan_text(text, DEFAULTACLBODY);
-}
-
-
-void
-archive_toc_lex_opclass_body(const char *text)
-{
-	archive_toc_scan_text(text, OPCLASSBODY);
-}
-
-
-/*
- * archive_toc_lex_function_signature arms FUNCSIGBODY, for the plain
- * (non-ACL/COMMENT) FUNCTION/PROCEDURE/AGGREGATE tag's own signature
- * text -- almost, but not quite, OBJTYPEBODY/OBJTYPEARGS again (the same
- * pair archive_toc_lex_object_type_line already arms for the ACL/COMMENT-
- * wrapped case): unlike that case, this name is never fmtId()-quoted,
- * even when it would need to be for having an embedded space itself
- * (format_function_signature's own honor_quotes=false, "appropriate for
- * use in TOC tags" -- see pg_dump.c, and tests/toc-coverage/fixture.sql's
- * "Fixture Weird Fn"), so stopping at a space the way OBJTYPEBODY's own
- * identifier rule does would wrongly cut such a name short. FUNCSIGBODY
- * is the same idea with that one rule changed: its own identifier rule
- * stops only at '(', the one character a function/aggregate name can
- * truly never itself contain, then hands off to the very same OBJTYPEARGS
- * once it gets there.
- */
-void
-archive_toc_lex_function_signature(const char *text)
-{
-	archive_toc_scan_text(text, FUNCSIGBODY);
+	free(withNewline);
 }

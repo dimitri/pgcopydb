@@ -13,6 +13,7 @@ RUN apt-get update \
         debhelper \
         autotools-dev \
         flex \
+        bison \
         libgc-dev \
         libedit-dev \
         libpam0g-dev \
