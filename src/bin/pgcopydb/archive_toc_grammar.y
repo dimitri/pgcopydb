@@ -137,7 +137,8 @@ static void archiveTocArgListAppend(ArchiveArgList *list, char *item);
  */
 %token <oid> OID
 %token UNKNOWN
-%token AS LANGUAGE_KW SERVER_KW USING ON DOMAIN CAST_KW TRANSFORM_KW
+%token AS LANGUAGE_KW SERVER_KW USING ON DOMAIN
+%token CAST_KW TRANSFORM_KW USER_MAPPING_KW DEFAULT_ACL_KW
 /*
  * FOR carries its own start-of-keyword position (set in archive_toc_
  * lexer.l, like SPACE's own .pos): NESTED_TRANSFORM's body starts
@@ -637,7 +638,7 @@ entry:
 		}
 
 	/* 3602; 0 0 USER MAPPING - USER MAPPING postgres SERVER fixture_server postgres */
-	| TOP_USER_MAPPING nspname mark WORD SPACE WORD SPACE WORD SERVER_KW WORD mark owner
+	| TOP_USER_MAPPING nspname mark USER_MAPPING_KW WORD SERVER_KW WORD mark owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -648,24 +649,22 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			strlcpy(item->userMapping.user, $8.text,
+			strlcpy(item->userMapping.user, $5.text,
 					sizeof(item->userMapping.user));
-			strlcpy(item->userMapping.server, $10.text,
+			strlcpy(item->userMapping.server, $7.text,
 					sizeof(item->userMapping.server));
 
-			char *body = archiveTocSlice($3, $11);
-			archiveTocBuildSimpleNames(item, body, $12);
+			char *body = archiveTocSlice($3, $8);
+			archiveTocBuildSimpleNames(item, body, $9);
 			free(body);
 
-			free($4.text);
-			free($6.text);
-			free($8.text);
-			free($10.text);
-			free($12);
+			free($5.text);
+			free($7.text);
+			free($9);
 		}
 
 	/* 2151; 826 16584 DEFAULT ACL toc_fixture DEFAULT PRIVILEGES FOR TABLES postgres */
-	| TOP_DEFAULT_ACL nspname mark WORD SPACE WORD FOR wordname owner
+	| TOP_DEFAULT_ACL nspname mark DEFAULT_ACL_KW FOR wordname owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -676,11 +675,11 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			strlcpy(item->defaultAclObjectType, $8.text,
+			strlcpy(item->defaultAclObjectType, $6.text,
 					sizeof(item->defaultAclObjectType));
 
 			/*
-			 * bodyEnd comes from wordname's own $8.end (set when its
+			 * bodyEnd comes from wordname's own $6.end (set when its
 			 * last WORD was lexed, see archive_toc_lexer.l), not a
 			 * trailing `mark` here: wordname's own recursive rule and
 			 * owner's "has an owner" rule both start with
@@ -693,14 +692,12 @@ entry:
 			 * Reading the end position off wordname's own already-
 			 * captured value sidesteps the conflict entirely.
 			 */
-			char *body = archiveTocSlice($3, $8.end);
-			archiveTocBuildSimpleNames(item, body, $9);
+			char *body = archiveTocSlice($3, $6.end);
+			archiveTocBuildSimpleNames(item, body, $7);
 			free(body);
 
-			free($4.text);
 			free($6.text);
-			free($8.text);
-			free($9);
+			free($7);
 		}
 	;
 
@@ -716,104 +713,104 @@ entry:
  */
 nested_entry:
 	/* 3605; 0 0 COMMENT toc_fixture TABLE parent postgres */
-	NESTED_RELATION_LIKE SPACE mark objname mark owner
+	NESTED_RELATION_LIKE mark objname mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
-			archiveTocBuildRelationNames(item, $4.text, "", $6);
-			archiveTocBuildUseListRemainder(item, $3, $5, $6);
-			free($4.text);
-			free($6);
+			archiveTocBuildRelationNames(item, $3.text, "", $5);
+			archiveTocBuildUseListRemainder(item, $2, $4, $5);
+			free($3.text);
+			free($5);
 		}
 
 	/* 3606; 0 0 COMMENT toc_fixture COLUMN parent.name postgres */
-	| NESTED_COLUMN SPACE mark objname '.' objname mark owner
+	| NESTED_COLUMN mark objname '.' objname mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
-			archiveTocBuildRelationNames(item, $4.text, $6.text, $8);
-			archiveTocBuildUseListRemainder(item, $3, $7, $8);
-			free($4.text);
-			free($6.text);
-			free($8);
+			archiveTocBuildRelationNames(item, $3.text, $5.text, $7);
+			archiveTocBuildUseListRemainder(item, $2, $6, $7);
+			free($3.text);
+			free($5.text);
+			free($7);
 		}
 
 	/* 3618; 0 0 COMMENT toc_fixture TRIGGER parent_trg ON parent postgres */
-	| NESTED_ON_RELATION SPACE mark objname ON objname mark owner
+	| NESTED_ON_RELATION mark objname ON objname mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
-			archiveTocBuildRelationNames(item, $6.text, $4.text, $8);
-			archiveTocBuildUseListRemainder(item, $3, $7, $8);
-			free($4.text);
-			free($6.text);
-			free($8);
+			archiveTocBuildRelationNames(item, $5.text, $3.text, $7);
+			archiveTocBuildUseListRemainder(item, $2, $6, $7);
+			free($3.text);
+			free($5.text);
+			free($7);
 		}
 
 	/* 3589; 0 0 COMMENT toc_fixture FUNCTION fixture_add(a integer, b integer) postgres */
-	| NESTED_FUNCLIKE SPACE mark objname '(' arglist ')' mark owner
+	| NESTED_FUNCLIKE mark objname '(' arglist ')' mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			bool isStar = ($6.count == 1 && streq($6.items[0], "*"));
+			bool isStar = ($5.count == 1 && streq($5.items[0], "*"));
 
 			if (isStar)
 			{
-				free($6.items[0]);
-				free($6.items);
+				free($5.items[0]);
+				free($5.items);
 				item->signature.args = NULL;
 				item->signature.argsCount = 0;
 			}
 			else
 			{
-				item->signature.args = $6.items;
-				item->signature.argsCount = $6.count;
+				item->signature.args = $5.items;
+				item->signature.argsCount = $5.count;
 			}
 
-			item->signature.argsText = $6.text;
+			item->signature.argsText = $5.text;
 
-			archiveTocBuildSimpleNames(item, $4.text, $9);
-			archiveTocBuildUseListRemainder(item, $3, $8, $9);
-			free($4.text);
-			free($9);
+			archiveTocBuildSimpleNames(item, $3.text, $8);
+			archiveTocBuildUseListRemainder(item, $2, $7, $8);
+			free($3.text);
+			free($8);
 		}
 
 	/* 3594; 0 0 COMMENT toc_fixture OPERATOR === (integer, integer) postgres */
-	| NESTED_OPERATOR SPACE mark objname SPACE '(' typename ',' SPACE typename ')' mark owner
+	| NESTED_OPERATOR mark objname SPACE '(' typename ',' SPACE typename ')' mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
 			archiveTocSetOperatorArg(&item->operatorArgs.hasLeftArg,
-									  &item->operatorArgs.leftArg, $7);
+									  &item->operatorArgs.leftArg, $6);
 			archiveTocSetOperatorArg(&item->operatorArgs.hasRightArg,
-									  &item->operatorArgs.rightArg, $10);
+									  &item->operatorArgs.rightArg, $9);
 
-			archiveTocBuildSimpleNames(item, $4.text, $13);
-			archiveTocBuildUseListRemainder(item, $3, $12, $13);
-			free($4.text);
-			free($13);
+			archiveTocBuildSimpleNames(item, $3.text, $12);
+			archiveTocBuildUseListRemainder(item, $2, $11, $12);
+			free($3.text);
+			free($12);
 		}
 
 	/* 3587; 0 0 COMMENT - CAST (toc_fixture.positive_int AS integer)  */
-	| NESTED_CAST SPACE mark '(' castSourceType AS castTargetType ')' mark owner
+	| NESTED_CAST mark '(' castSourceType AS castTargetType ')' mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			item->cast.sourceType = strdup($5);
-			item->cast.targetType = strdup($7);
+			item->cast.sourceType = strdup($4);
+			item->cast.targetType = strdup($6);
 
-			char *body = archiveTocSlice($3, $9);
+			char *body = archiveTocSlice($2, $8);
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
-									   body, $10);
-			archiveTocBuildUseListRemainder(item, $3, $9, $10);
+									   body, $9);
+			archiveTocBuildUseListRemainder(item, $2, $8, $9);
 			free(body);
 
-			free($5);
-			free($7);
-			free($10);
+			free($4);
+			free($6);
+			free($9);
 		}
 
 	/* 3583; 0 0 COMMENT - TRANSFORM FOR integer LANGUAGE plpgsql  */
@@ -850,12 +847,12 @@ nested_entry:
 		}
 
 	/* 3596; 0 0 COMMENT toc_fixture OPERATOR FAMILY fixture_int_ops USING btree postgres */
-	| NESTED_OPCLASS_FAMILY SPACE mark name USING WORD mark owner
+	| NESTED_OPCLASS_FAMILY mark name USING WORD mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			strlcpy(item->opClassFamily.accessMethod, $6.text, sizeof(item->opClassFamily.accessMethod));
+			strlcpy(item->opClassFamily.accessMethod, $5.text, sizeof(item->opClassFamily.accessMethod));
 
 			/*
 			 * item->name/restoreListName use the NARROWED name, sliced
@@ -863,25 +860,25 @@ nested_entry:
 			 * useListRemainder reproduces the FULL verbatim text,
 			 * "USING amname" included.
 			 */
-			char *opclassName = archiveTocSlice($3, $4);
+			char *opclassName = archiveTocSlice($2, $3);
 
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
-									   opclassName, $8);
-			archiveTocBuildUseListRemainder(item, $3, $7, $8);
+									   opclassName, $7);
+			archiveTocBuildUseListRemainder(item, $2, $6, $7);
 
 			free(opclassName);
-			free($6.text);
-			free($8);
+			free($5.text);
+			free($7);
 		}
 
 	/* 3582; 0 0 COMMENT - EXTENSION fixture_transform  */
-	| NESTED_EXTENSION SPACE mark WORD mark owner
+	| NESTED_EXTENSION mark WORD mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			strlcpy(item->name, $4.text, sizeof(item->name));
-			strlcpy(item->owner, $6, sizeof(item->owner));
+			strlcpy(item->name, $3.text, sizeof(item->name));
+			strlcpy(item->owner, $5, sizeof(item->owner));
 			item->tagType = ARCHIVE_TAG_TYPE_EXTENSION;
 
 			/*
@@ -892,33 +889,33 @@ nested_entry:
 			 * no filters catalog query relies on it being anything
 			 * else, and this preserves that exactly.
 			 */
-			item->restoreListName = strdup($4.text);
+			item->restoreListName = strdup($3.text);
 
-			archiveTocBuildUseListRemainder(item, $3, $5, $6);
+			archiveTocBuildUseListRemainder(item, $2, $4, $5);
 
-			free($4.text);
-			free($6);
+			free($3.text);
+			free($5);
 		}
 
 	/* 3581; 0 0 COMMENT toc_fixture COLLATION fixture_collation postgres */
-	| NESTED_GENERIC SPACE mark name owner
+	| NESTED_GENERIC mark name owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
 			/*
-			 * bodyEnd is $4 (name's own end position), not a trailing
+			 * bodyEnd is $3 (name's own end position), not a trailing
 			 * `mark` -- see TOP_DEFAULT_ACL's own comment on why that
 			 * specific placement would be a genuine LALR(1) shift/
 			 * reduce conflict with name's own recursion.
 			 */
-			char *genericName = archiveTocSlice($3, $4);
+			char *genericName = archiveTocSlice($2, $3);
 
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
-									   genericName, $5);
-			archiveTocBuildUseListRemainder(item, $3, $4, $5);
+									   genericName, $4);
+			archiveTocBuildUseListRemainder(item, $2, $3, $4);
 			free(genericName);
-			free($5);
+			free($4);
 		}
 	;
 

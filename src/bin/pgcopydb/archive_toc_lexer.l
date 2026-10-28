@@ -166,68 +166,68 @@ const char *archive_toc_token_end;
 ";"                                { return ';'; }
 " "+                               ;
 
-"ACCESS METHOD"                   { return archive_toc_tag_token(ARCHIVE_TAG_ACCESS_METHOD); }
-"ACL"                             { return archive_toc_tag_token(ARCHIVE_TAG_ACL); }
-"AGGREGATE"                       { return archive_toc_tag_token(ARCHIVE_TAG_AGGREGATE); }
-"ATTRDEF"                         { return archive_toc_tag_token(ARCHIVE_TAG_ATTRDEF); }
-"BLOB DATA"                       { return archive_toc_tag_token(ARCHIVE_TAG_BLOB_DATA); }
-"BLOB"                            { return archive_toc_tag_token(ARCHIVE_TAG_BLOB); }
-"CAST"                            { return archive_toc_tag_token(ARCHIVE_TAG_CAST); }
-"CHECK CONSTRAINT"                { return archive_toc_tag_token(ARCHIVE_TAG_CHECK_CONSTRAINT); }
-"COLLATION"                       { return archive_toc_tag_token(ARCHIVE_TAG_COLLATION); }
-"COLUMN"                          { return archive_toc_tag_token(ARCHIVE_TAG_COLUMN); }
-"COMMENT"                         { return archive_toc_tag_token(ARCHIVE_TAG_COMMENT); }
-"CONSTRAINT"                      { return archive_toc_tag_token(ARCHIVE_TAG_CONSTRAINT); }
-"CONVERSION"                      { return archive_toc_tag_token(ARCHIVE_TAG_CONVERSION); }
-"DATABASE"                        { return archive_toc_tag_token(ARCHIVE_TAG_DATABASE); }
-"DEFAULT ACL"                     { return archive_toc_tag_token(ARCHIVE_TAG_DEFAULT_ACL); }
-"DEFAULT"                         { return archive_toc_tag_token(ARCHIVE_TAG_DEFAULT); }
-"DOMAIN"                          { return archive_toc_tag_token(ARCHIVE_TAG_DOMAIN); }
-"DUMMY TYPE"                      { return archive_toc_tag_token(ARCHIVE_TAG_DUMMY_TYPE); }
-"EVENT TRIGGER"                   { return archive_toc_tag_token(ARCHIVE_TAG_EVENT_TRIGGER); }
-"EXTENSION"                       { return archive_toc_tag_token(ARCHIVE_TAG_EXTENSION); }
-"FK CONSTRAINT"                   { return archive_toc_tag_token(ARCHIVE_TAG_FK_CONSTRAINT); }
-"FOREIGN DATA WRAPPER"            { return archive_toc_tag_token(ARCHIVE_TAG_FOREIGN_DATA_WRAPPER); }
-"FOREIGN SERVER"                  { return archive_toc_tag_token(ARCHIVE_TAG_FOREIGN_SERVER); }
-"FOREIGN TABLE"                   { return archive_toc_tag_token(ARCHIVE_TAG_FOREIGN_TABLE); }
-"FUNCTION"                        { return archive_toc_tag_token(ARCHIVE_TAG_FUNCTION); }
-"INDEX ATTACH"                    { return archive_toc_tag_token(ARCHIVE_TAG_INDEX_ATTACH); }
-"INDEX"                           { return archive_toc_tag_token(ARCHIVE_TAG_INDEX); }
-"LANGUAGE"                        { return archive_toc_tag_token(ARCHIVE_TAG_LANGUAGE); }
-"LARGE OBJECT"                    { return archive_toc_tag_token(ARCHIVE_TAG_LARGE_OBJECT); }
-"MATERIALIZED VIEW DATA"          { return archive_toc_tag_token(ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW); }
-"MATERIALIZED VIEW"               { return archive_toc_tag_token(ARCHIVE_TAG_MATERIALIZED_VIEW); }
-"OPERATOR CLASS"                  { return archive_toc_tag_token(ARCHIVE_TAG_OPERATOR_CLASS); }
-"OPERATOR FAMILY"                 { return archive_toc_tag_token(ARCHIVE_TAG_OPERATOR_FAMILY); }
-"OPERATOR"                        { return archive_toc_tag_token(ARCHIVE_TAG_OPERATOR); }
-"POLICY"                          { return archive_toc_tag_token(ARCHIVE_TAG_POLICY); }
-"PROCEDURAL LANGUAGE"             { return archive_toc_tag_token(ARCHIVE_TAG_PROCEDURAL_LANGUAGE); }
-"PROCEDURE"                       { return archive_toc_tag_token(ARCHIVE_TAG_PROCEDURE); }
-"PUBLICATION TABLES IN SCHEMA"    { return archive_toc_tag_token(ARCHIVE_TAG_PUBLICATION_TABLES_IN_SCHEMA); }
-"PUBLICATION TABLE"               { return archive_toc_tag_token(ARCHIVE_TAG_PUBLICATION_TABLE); }
-"PUBLICATION"                     { return archive_toc_tag_token(ARCHIVE_TAG_PUBLICATION); }
-"ROW SECURITY"                    { return archive_toc_tag_token(ARCHIVE_TAG_ROW_SECURITY); }
-"RULE"                            { return archive_toc_tag_token(ARCHIVE_TAG_RULE); }
-"SCHEMA"                          { return archive_toc_tag_token(ARCHIVE_TAG_SCHEMA); }
-"SEQUENCE OWNED BY"               { return archive_toc_tag_token(ARCHIVE_TAG_SEQUENCE_OWNED_BY); }
-"SEQUENCE SET"                    { return archive_toc_tag_token(ARCHIVE_TAG_SEQUENCE_SET); }
-"SEQUENCE"                        { return archive_toc_tag_token(ARCHIVE_TAG_SEQUENCE); }
-"SERVER"                          { return archive_toc_tag_token(ARCHIVE_TAG_SERVER); }
-"SHELL TYPE"                      { return archive_toc_tag_token(ARCHIVE_TAG_SHELL_TYPE); }
-"STATISTICS"                      { return archive_toc_tag_token(ARCHIVE_TAG_STATISTICS); }
-"SUBSCRIPTION"                    { return archive_toc_tag_token(ARCHIVE_TAG_SUBSCRIPTION); }
-"TABLE ATTACH"                    { return archive_toc_tag_token(ARCHIVE_TAG_TABLE_ATTACH); }
-"TABLE DATA"                      { return archive_toc_tag_token(ARCHIVE_TAG_TABLE_DATA); }
-"TABLE"                           { return archive_toc_tag_token(ARCHIVE_TAG_TABLE); }
-"TEXT SEARCH CONFIGURATION"       { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_CONFIGURATION); }
-"TEXT SEARCH DICTIONARY"          { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_DICTIONARY); }
-"TEXT SEARCH PARSER"              { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_PARSER); }
-"TEXT SEARCH TEMPLATE"            { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_TEMPLATE); }
-"TRANSFORM"                       { return archive_toc_tag_token(ARCHIVE_TAG_TRANSFORM); }
-"TRIGGER"                         { return archive_toc_tag_token(ARCHIVE_TAG_TRIGGER); }
-"TYPE"                            { return archive_toc_tag_token(ARCHIVE_TAG_TYPE); }
-"USER MAPPING"                    { return archive_toc_tag_token(ARCHIVE_TAG_USER_MAPPING); }
-"VIEW"                            { return archive_toc_tag_token(ARCHIVE_TAG_VIEW); }
+"ACCESS METHOD"" "+                   { return archive_toc_tag_token(ARCHIVE_TAG_ACCESS_METHOD); }
+"ACL"" "+                             { return archive_toc_tag_token(ARCHIVE_TAG_ACL); }
+"AGGREGATE"" "+                       { return archive_toc_tag_token(ARCHIVE_TAG_AGGREGATE); }
+"ATTRDEF"" "+                         { return archive_toc_tag_token(ARCHIVE_TAG_ATTRDEF); }
+"BLOB DATA"" "+                       { return archive_toc_tag_token(ARCHIVE_TAG_BLOB_DATA); }
+"BLOB"" "+                            { return archive_toc_tag_token(ARCHIVE_TAG_BLOB); }
+"CAST"" "+                            { return archive_toc_tag_token(ARCHIVE_TAG_CAST); }
+"CHECK CONSTRAINT"" "+                { return archive_toc_tag_token(ARCHIVE_TAG_CHECK_CONSTRAINT); }
+"COLLATION"" "+                       { return archive_toc_tag_token(ARCHIVE_TAG_COLLATION); }
+"COLUMN"" "+                          { return archive_toc_tag_token(ARCHIVE_TAG_COLUMN); }
+"COMMENT"" "+                         { return archive_toc_tag_token(ARCHIVE_TAG_COMMENT); }
+"CONSTRAINT"" "+                      { return archive_toc_tag_token(ARCHIVE_TAG_CONSTRAINT); }
+"CONVERSION"" "+                      { return archive_toc_tag_token(ARCHIVE_TAG_CONVERSION); }
+"DATABASE"" "+                        { return archive_toc_tag_token(ARCHIVE_TAG_DATABASE); }
+"DEFAULT ACL"" "+                     { return archive_toc_tag_token(ARCHIVE_TAG_DEFAULT_ACL); }
+"DEFAULT"" "+                         { return archive_toc_tag_token(ARCHIVE_TAG_DEFAULT); }
+"DOMAIN"" "+                          { return archive_toc_tag_token(ARCHIVE_TAG_DOMAIN); }
+"DUMMY TYPE"" "+                      { return archive_toc_tag_token(ARCHIVE_TAG_DUMMY_TYPE); }
+"EVENT TRIGGER"" "+                   { return archive_toc_tag_token(ARCHIVE_TAG_EVENT_TRIGGER); }
+"EXTENSION"" "+                       { return archive_toc_tag_token(ARCHIVE_TAG_EXTENSION); }
+"FK CONSTRAINT"" "+                   { return archive_toc_tag_token(ARCHIVE_TAG_FK_CONSTRAINT); }
+"FOREIGN DATA WRAPPER"" "+            { return archive_toc_tag_token(ARCHIVE_TAG_FOREIGN_DATA_WRAPPER); }
+"FOREIGN SERVER"" "+                  { return archive_toc_tag_token(ARCHIVE_TAG_FOREIGN_SERVER); }
+"FOREIGN TABLE"" "+                   { return archive_toc_tag_token(ARCHIVE_TAG_FOREIGN_TABLE); }
+"FUNCTION"" "+                        { return archive_toc_tag_token(ARCHIVE_TAG_FUNCTION); }
+"INDEX ATTACH"" "+                    { return archive_toc_tag_token(ARCHIVE_TAG_INDEX_ATTACH); }
+"INDEX"" "+                           { return archive_toc_tag_token(ARCHIVE_TAG_INDEX); }
+"LANGUAGE"" "+                        { return archive_toc_tag_token(ARCHIVE_TAG_LANGUAGE); }
+"LARGE OBJECT"" "+                    { return archive_toc_tag_token(ARCHIVE_TAG_LARGE_OBJECT); }
+"MATERIALIZED VIEW DATA"" "+          { return archive_toc_tag_token(ARCHIVE_TAG_REFRESH_MATERIALIZED_VIEW); }
+"MATERIALIZED VIEW"" "+               { return archive_toc_tag_token(ARCHIVE_TAG_MATERIALIZED_VIEW); }
+"OPERATOR CLASS"" "+                  { return archive_toc_tag_token(ARCHIVE_TAG_OPERATOR_CLASS); }
+"OPERATOR FAMILY"" "+                 { return archive_toc_tag_token(ARCHIVE_TAG_OPERATOR_FAMILY); }
+"OPERATOR"" "+                        { return archive_toc_tag_token(ARCHIVE_TAG_OPERATOR); }
+"POLICY"" "+                          { return archive_toc_tag_token(ARCHIVE_TAG_POLICY); }
+"PROCEDURAL LANGUAGE"" "+             { return archive_toc_tag_token(ARCHIVE_TAG_PROCEDURAL_LANGUAGE); }
+"PROCEDURE"" "+                       { return archive_toc_tag_token(ARCHIVE_TAG_PROCEDURE); }
+"PUBLICATION TABLES IN SCHEMA"" "+    { return archive_toc_tag_token(ARCHIVE_TAG_PUBLICATION_TABLES_IN_SCHEMA); }
+"PUBLICATION TABLE"" "+               { return archive_toc_tag_token(ARCHIVE_TAG_PUBLICATION_TABLE); }
+"PUBLICATION"" "+                     { return archive_toc_tag_token(ARCHIVE_TAG_PUBLICATION); }
+"ROW SECURITY"" "+                    { return archive_toc_tag_token(ARCHIVE_TAG_ROW_SECURITY); }
+"RULE"" "+                            { return archive_toc_tag_token(ARCHIVE_TAG_RULE); }
+"SCHEMA"" "+                          { return archive_toc_tag_token(ARCHIVE_TAG_SCHEMA); }
+"SEQUENCE OWNED BY"" "+               { return archive_toc_tag_token(ARCHIVE_TAG_SEQUENCE_OWNED_BY); }
+"SEQUENCE SET"" "+                    { return archive_toc_tag_token(ARCHIVE_TAG_SEQUENCE_SET); }
+"SEQUENCE"" "+                        { return archive_toc_tag_token(ARCHIVE_TAG_SEQUENCE); }
+"SERVER"" "+                          { return archive_toc_tag_token(ARCHIVE_TAG_SERVER); }
+"SHELL TYPE"" "+                      { return archive_toc_tag_token(ARCHIVE_TAG_SHELL_TYPE); }
+"STATISTICS"" "+                      { return archive_toc_tag_token(ARCHIVE_TAG_STATISTICS); }
+"SUBSCRIPTION"" "+                    { return archive_toc_tag_token(ARCHIVE_TAG_SUBSCRIPTION); }
+"TABLE ATTACH"" "+                    { return archive_toc_tag_token(ARCHIVE_TAG_TABLE_ATTACH); }
+"TABLE DATA"" "+                      { return archive_toc_tag_token(ARCHIVE_TAG_TABLE_DATA); }
+"TABLE"" "+                           { return archive_toc_tag_token(ARCHIVE_TAG_TABLE); }
+"TEXT SEARCH CONFIGURATION"" "+       { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_CONFIGURATION); }
+"TEXT SEARCH DICTIONARY"" "+          { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_DICTIONARY); }
+"TEXT SEARCH PARSER"" "+              { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_PARSER); }
+"TEXT SEARCH TEMPLATE"" "+            { return archive_toc_tag_token(ARCHIVE_TAG_TEXT_SEARCH_TEMPLATE); }
+"TRANSFORM"" "+                       { return archive_toc_tag_token(ARCHIVE_TAG_TRANSFORM); }
+"TRIGGER"" "+                         { return archive_toc_tag_token(ARCHIVE_TAG_TRIGGER); }
+"TYPE"" "+                            { return archive_toc_tag_token(ARCHIVE_TAG_TYPE); }
+"USER MAPPING"" "+                    { return archive_toc_tag_token(ARCHIVE_TAG_USER_MAPPING); }
+"VIEW"" "+                            { return archive_toc_tag_token(ARCHIVE_TAG_VIEW); }
 
 .                                  { return UNKNOWN; }
 
@@ -294,7 +294,16 @@ const char *archive_toc_token_end;
    * whitespace convention of its own to bake into a dedicated pattern.
    */
 " "+"AS"" "+                       { return AS; }
-" "+"FOR"" "+                      { archive_toc_lval.pos = yytext + strspn(yytext, " ");
+  /*
+   * FOR's own leading space is "zero or more", not "one or more" like
+   * the rest of this block: NESTED_TRANSFORM reaches it with no
+   * separator left to consume (its own tag keyword's pattern,
+   * <INITIAL> above, already baked in the one space that used to sit
+   * here -- unlike TOP_TRANSFORM's/TOP_DEFAULT_ACL's repeated-word
+   * tokens ahead of it, which still leave FOR's own leading space
+   * alone, see CAST_KW/TRANSFORM_KW/DEFAULT_ACL_KW's own comments).
+   */
+" "*"FOR"" "+                      { archive_toc_lval.pos = yytext + strspn(yytext, " ");
                                      return FOR; }
 " "+"LANGUAGE"" "+                 { return LANGUAGE_KW; }
 " "+"SERVER"" "+                   { return SERVER_KW; }
@@ -302,14 +311,23 @@ const char *archive_toc_token_end;
 " "+"ON"" "+                       { return ON; }
 
   /*
-   * CAST's own repeated tag word (dumpCast's labelq always writes
-   * "CAST (sourcetype AS targettype)" for the remainder, pg_dump.c) --
-   * unlike the six above, nothing ever precedes it with a run of
-   * whitespace of its own (nspname's own WORD/NO_NSPNAME pattern
-   * already consumes the single separator space ahead of it, see
-   * <NAMESPACE> above), so only the trailing space needs baking in.
+   * CAST's and USER MAPPING's own repeated tag words (dumpCast's and
+   * dumpUserMappings' labelq always write "CAST (sourcetype AS
+   * targettype)" / "USER MAPPING username SERVER servername" for the
+   * remainder, pg_dump.c) -- unlike the six above, nothing ever
+   * precedes either with a run of whitespace of its own (nspname's own
+   * WORD/NO_NSPNAME pattern already consumes the single separator
+   * space ahead of it, see <NAMESPACE> above), so only the trailing
+   * space needs baking in. DEFAULT ACL's own repeated "DEFAULT
+   * PRIVILEGES" (dumpDefaultACL, pg_dump.c) needs neither: FOR's own
+   * pattern already bakes the separator space ahead of it, same as
+   * TRANSFORM_KW below -- but its one internal space, between the two
+   * words, is still part of this single fixed literal, not something
+   * a later token could ever consume on its own.
    */
 "CAST"" "+                         { return CAST_KW; }
+"USER"" "+"MAPPING"" "+            { return USER_MAPPING_KW; }
+"DEFAULT"" "+"PRIVILEGES"          { return DEFAULT_ACL_KW; }
 
 " "+                               { archive_toc_lval.pos = archive_toc_token_end;
                                      return SPACE; }
@@ -380,6 +398,15 @@ const char *archive_toc_token_end;
  * text straight off bison's own parse stack, into item->desc/description
  * or item->objectType/objectTypeText.
  *
+ * Every one of these keywords' own pattern bakes in its mandatory
+ * trailing separator space (one or more, same "-"" "/WORD" " convention
+ * as NAMESPACE's own rules, see archive_toc_lexer.l's file header),
+ * so yytext itself still has it -- trimmed off here, once, rather than
+ * by every individual pattern's own action, since it's the one thing
+ * they'd all repeat identically. A multi-word tag's own internal space
+ * ("DEFAULT ACL", "USER MAPPING", ...) is untouched: only space run
+ * actually at the end goes.
+ *
  * ACL and COMMENT themselves switch to NAMESPACE (their own outer
  * namespace field, exactly like every other top-level tag); every other
  * top-level tag does too. A nested object type never has a namespace of
@@ -391,6 +418,14 @@ static bool archive_toc_nested_mode = false;
 static int
 archive_toc_tag_token(ArchiveItemDesc desc)
 {
+	int len = yyleng;
+
+	while (len > 0 && yytext[len - 1] == ' ')
+	{
+		--len;
+	}
+	yytext[len] = '\0';
+
 	archive_toc_lval.tag.desc = desc;
 	archive_toc_lval.tag.text = strdup(yytext);
 
