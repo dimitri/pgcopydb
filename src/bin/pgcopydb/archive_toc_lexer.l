@@ -53,6 +53,37 @@
  * paren depth across possibly several matches and returns the whole group
  * (parentheses excluded) as one ARCHIVE_TOC_TOKEN_ARGS token once depth
  * returns to zero.
+ *
+ * Five more shapes -- CAST's "(source AS target)", TRANSFORM's "FOR type
+ * LANGUAGE language", USER MAPPING's "user SERVER server", DEFAULT ACL's
+ * "FOR objecttype", and an OPERATOR CLASS/FAMILY ACL/COMMENT's "name USING
+ * amname" -- are, the same way, genuinely regular rather than irregular:
+ * each is a fixed sequence of (possibly multi-word) text around one or two
+ * fixed literal keywords, no two of these shapes alike but none of them
+ * recursive either. So each gets its own start condition (CASTBODY,
+ * TRANSFORMBODY, USERMAPPINGBODY, DEFAULTACLBODY, OPCLASSBODY) entered
+ * directly by its own archive_toc_lex_*_body() entry point (declared in
+ * archive_toc_lexer.h) rather than via a TAG match: the caller already
+ * knows which shape it has (see archive_toc_parser.c's
+ * applyTopLevelSignatureExtras and parseAclOrCommentRemainder), there is no
+ * object-type keyword of its own to recognize first. All five share the
+ * same two kinds of rules: one literal pattern per keyword (with its
+ * surrounding single space baked in, e.g. " AS ", " LANGUAGE ", so it
+ * out-competes the generic word rule on length exactly where it needs to,
+ * see below) and a generic ARCHIVE_TOC_TOKEN_WORD for one space-delimited
+ * run of anything else, accumulated by the caller across possibly several
+ * WORD tokens in a row (a multi-word type name, e.g. "double precision")
+ * until the next keyword token ends the run -- the same accumulate-until-
+ * the-boundary idiom OBJTYPEARGS already uses for a balanced-parens group,
+ * one level simpler since there is no nesting to track here, only a fixed
+ * keyword to stop at. This relies on the generic word rule ([^() ]+ or
+ * [^ ]+, never matching a space itself) always losing the longest-match
+ * tie to a keyword literal at the one spot the keyword can actually occur
+ * -- exactly the same risk profile pg_dump's own identifiers practically
+ * never trigger that archive_toc_parser.c's marker-based string splitting
+ * already relied on before this (CAST/TRANSFORM/OPERATOR CLASS/FAMILY's "
+ * USING "); this only moves that same assumption into the lexer's own
+ * token definitions instead of leaving it as ad hoc strstr() calls.
  */
 
 #include <stdlib.h>
@@ -66,6 +97,7 @@
 
 static int archive_toc_tag_token(ArchiveItemDesc desc);
 static int archive_toc_object_type_word_token(void);
+static int archive_toc_word_token(void);
 static bool archive_toc_object_type_has_ident(ArchiveItemDesc desc);
 static void archive_toc_ident_append(const char *s, int len);
 static void archive_toc_args_append(const char *s, int len);
@@ -87,6 +119,12 @@ static int archive_toc_args_depth = 0;
 %x OBJTYPEBODY
 %x OBJTYPEQIDENT
 %x OBJTYPEARGS
+%x CASTBODY
+%x TRANSFORMBODY
+%x USERMAPPINGBODY
+%x DEFAULTACLBODY
+%x OPCLASSBODY
+%x FUNCSIGBODY
 
 %%
 
@@ -214,6 +252,62 @@ static int archive_toc_args_depth = 0;
 
 }
 
+<CASTBODY>{
+
+"("                                { /* no token: caller doesn't need it */ }
+")"                                { return ARCHIVE_TOC_TOKEN_RPAREN; }
+" AS "                             { return ARCHIVE_TOC_TOKEN_AS; }
+" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
+[^() ]+                            { return archive_toc_word_token(); }
+
+}
+
+<TRANSFORMBODY>{
+
+"FOR "                             { return ARCHIVE_TOC_TOKEN_FOR; }
+" LANGUAGE "                       { return ARCHIVE_TOC_TOKEN_LANGUAGE_KW; }
+" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
+[^ ]+                              { return archive_toc_word_token(); }
+
+}
+
+<USERMAPPINGBODY>{
+
+" SERVER "                         { return ARCHIVE_TOC_TOKEN_SERVER_KW; }
+" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
+[^ ]+                              { return archive_toc_word_token(); }
+
+}
+
+<DEFAULTACLBODY>{
+
+"FOR "                             { return ARCHIVE_TOC_TOKEN_FOR; }
+" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
+[^ ]+                              { return archive_toc_word_token(); }
+
+}
+
+<OPCLASSBODY>{
+
+" USING "                          { return ARCHIVE_TOC_TOKEN_USING; }
+" "+                               { return ARCHIVE_TOC_TOKEN_SPACE; }
+[^ ]+                              { return archive_toc_word_token(); }
+
+}
+
+<FUNCSIGBODY>{
+
+"("                                { BEGIN(OBJTYPEARGS);
+                                     archive_toc_args_depth = 1;
+                                     archive_toc_args[0] = '\0'; }
+
+[^(]+                              { strlcpy(archive_toc_ident, yytext,
+                                             sizeof(archive_toc_ident));
+                                     archive_toc_ident_quoted = false;
+                                     return ARCHIVE_TOC_TOKEN_IDENT; }
+
+}
+
 <<EOF>>                            { return ARCHIVE_TOC_TOKEN_EOF; }
 
 %%
@@ -236,6 +330,7 @@ char archive_toc_last_desc_text[BUFSIZE];
 char archive_toc_ident[PG_NAMEDATALEN];
 bool archive_toc_ident_quoted;
 char archive_toc_args[BUFSIZE];
+char archive_toc_word[BUFSIZE];
 
 static bool archive_toc_object_type_mode = false;
 
@@ -318,6 +413,23 @@ archive_toc_object_type_word_token(void)
 	archive_toc_ident_quoted = false;
 
 	return ARCHIVE_TOC_TOKEN_IDENT;
+}
+
+
+/*
+ * archive_toc_word_token is CASTBODY/TRANSFORMBODY/USERMAPPINGBODY/
+ * DEFAULTACLBODY/OPCLASSBODY's generic word rule's action: there is no
+ * keyword to classify a match against here (each of those five states has
+ * its own dedicated literal rule for its own keyword(s) already, see the
+ * file header), so this just hands the matched word back to the caller as
+ * archive_toc_word.
+ */
+static int
+archive_toc_word_token(void)
+{
+	strlcpy(archive_toc_word, yytext, sizeof(archive_toc_word));
+
+	return ARCHIVE_TOC_TOKEN_WORD;
 }
 
 
@@ -434,4 +546,82 @@ void
 archive_toc_lex_object_type_line(const char *line)
 {
 	archive_toc_lex_start(line, true);
+}
+
+
+/*
+ * archive_toc_scan_text is archive_toc_lex_start's Phase 4 counterpart:
+ * the five further-structured shapes it serves (see the file header) have
+ * no TAG keyword of their own left to match -- the caller already knows
+ * which shape it has -- so there is no archive_toc_object_type_mode
+ * decision to make here, just arm the matching start condition directly.
+ */
+static void
+archive_toc_scan_text(const char *text, int state)
+{
+	if (archive_toc_buffer != NULL)
+	{
+		archive_toc__delete_buffer(archive_toc_buffer);
+	}
+
+	archive_toc_buffer = archive_toc__scan_string(text);
+	BEGIN(state);
+}
+
+
+void
+archive_toc_lex_cast_body(const char *text)
+{
+	archive_toc_scan_text(text, CASTBODY);
+}
+
+
+void
+archive_toc_lex_transform_body(const char *text)
+{
+	archive_toc_scan_text(text, TRANSFORMBODY);
+}
+
+
+void
+archive_toc_lex_user_mapping_body(const char *text)
+{
+	archive_toc_scan_text(text, USERMAPPINGBODY);
+}
+
+
+void
+archive_toc_lex_default_acl_body(const char *text)
+{
+	archive_toc_scan_text(text, DEFAULTACLBODY);
+}
+
+
+void
+archive_toc_lex_opclass_body(const char *text)
+{
+	archive_toc_scan_text(text, OPCLASSBODY);
+}
+
+
+/*
+ * archive_toc_lex_function_signature arms FUNCSIGBODY, for the plain
+ * (non-ACL/COMMENT) FUNCTION/PROCEDURE/AGGREGATE tag's own signature
+ * text -- almost, but not quite, OBJTYPEBODY/OBJTYPEARGS again (the same
+ * pair archive_toc_lex_object_type_line already arms for the ACL/COMMENT-
+ * wrapped case): unlike that case, this name is never fmtId()-quoted,
+ * even when it would need to be for having an embedded space itself
+ * (format_function_signature's own honor_quotes=false, "appropriate for
+ * use in TOC tags" -- see pg_dump.c, and tests/toc-coverage/fixture.sql's
+ * "Fixture Weird Fn"), so stopping at a space the way OBJTYPEBODY's own
+ * identifier rule does would wrongly cut such a name short. FUNCSIGBODY
+ * is the same idea with that one rule changed: its own identifier rule
+ * stops only at '(', the one character a function/aggregate name can
+ * truly never itself contain, then hands off to the very same OBJTYPEARGS
+ * once it gets there.
+ */
+void
+archive_toc_lex_function_signature(const char *text)
+{
+	archive_toc_scan_text(text, FUNCSIGBODY);
 }

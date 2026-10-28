@@ -329,88 +329,112 @@ splitAclOrCommentOpaqueNameAndOwner(const char *remainder,
 
 
 /*
- * splitOnMarker finds the first occurrence of `marker` in `text` and
- * splits around it: *beforeOut gets everything before it, *afterOut
- * everything after, both freshly malloc'ed (the caller's to free, or to
- * hand off to an ArchiveContentItem field). Returns false (leaving both
- * outputs unset) when the marker isn't found, so callers can fall back to
- * leaving the field opaque -- the same "not supported, caller still has
- * the raw text" convention every other split function in this file
- * follows. Used for every Phase 4 "X <literal keyword> Y" shape below
- * (CAST's " AS ", TRANSFORM's " LANGUAGE ", USER MAPPING's " SERVER "):
- * same risk profile as the "ON"/"USING" literal markers
- * parseAclOrCommentRemainder and splitOperatorClassFamilyUsing already
- * rely on -- a name containing the marker text itself as a substring
- * would be misparsed, but pg_dump's own identifiers practically never do.
+ * archiveTocAccumulateWords pulls ARCHIVE_TOC_TOKEN_WORD/SPACE tokens from
+ * whichever CASTBODY/TRANSFORMBODY/USERMAPPINGBODY/DEFAULTACLBODY/
+ * OPCLASSBODY scan is currently armed (see archive_toc_lexer.l's file
+ * header) and concatenates them -- a single SPACE between two WORDs
+ * becomes one literal space in the result, so a multi-word type name
+ * (e.g. "double precision") comes back whole -- stopping at the first
+ * token that is neither, which is always exactly the keyword (or EOF/
+ * RPAREN) each of those five shapes uses as its own next boundary.
+ * *stopTokenOut is that stopping token, for the caller to check against
+ * the boundary it actually expected there (ARCHIVE_TOC_TOKEN_AS,
+ * _LANGUAGE_KW, _SERVER_KW, _USING, _EOF, _RPAREN): this function only
+ * tokenizes, same division as everywhere else in this file, it doesn't
+ * know which boundary makes sense for the shape its caller has.
+ *
+ * Returns NULL (logging ALLOCATION_FAILED_ERROR) on OOM, same convention
+ * as every other allocation in this file; otherwise always returns a
+ * freshly malloc'ed string, the caller's to free, even when it turns out
+ * empty (e.g. a shape that doesn't match what was expected at all).
  */
-static bool
-splitOnMarker(const char *text, const char *marker, char **beforeOut,
-			  char **afterOut)
+static char *
+archiveTocAccumulateWords(int *stopTokenOut)
 {
-	char *pos = strstr(text, marker);
+	char buffer[BUFSIZE] = { 0 };
+	int token;
 
-	if (pos == NULL)
+	for (;;)
 	{
-		return false;
+		token = archive_toc_lex();
+
+		if (token == ARCHIVE_TOC_TOKEN_WORD)
+		{
+			strlcat(buffer, archive_toc_word, sizeof(buffer));
+			continue;
+		}
+
+		if (token == ARCHIVE_TOC_TOKEN_SPACE)
+		{
+			size_t len = strlen(buffer);
+
+			if (len > 0 && len + 1 < sizeof(buffer))
+			{
+				buffer[len] = ' ';
+				buffer[len + 1] = '\0';
+			}
+
+			continue;
+		}
+
+		break;
 	}
 
-	size_t beforeLen = pos - text;
+	*stopTokenOut = token;
 
-	char *before = (char *) calloc(beforeLen + 1, sizeof(char));
-	char *after = strdup(pos + strlen(marker));
+	char *result = strdup(buffer);
 
-	if (before == NULL || after == NULL)
+	if (result == NULL)
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
-		free(before);
-		free(after);
-		return false;
 	}
 
-	strlcpy(before, text, beforeLen + 1);
-
-	*beforeOut = before;
-	*afterOut = after;
-
-	return true;
+	return result;
 }
 
 
 /*
  * splitCastTypes splits a CAST's own "(sourcetype AS targettype)" text
- * (parens included) into item->castSourceType/castTargetType. Used both
- * for the plain top-level CAST entry (applyTopLevelSignatureExtras,
- * after stripping the repeated "CAST " prefix pg_dump's own labelq
- * includes, see dumpCast in pg_dump.c) and for a COMMENT ON CAST's
- * nested remainder (parseAclOrCommentRemainder), which has no such
- * prefix to strip (dumpComment is called with castargs, not labelq).
+ * (parens included) into item->castSourceType/castTargetType, via the
+ * lexer's own CASTBODY start condition (archive_toc_lexer.l) rather than
+ * a hand-rolled " AS " strstr(). Used both for the plain top-level CAST
+ * entry (applyTopLevelSignatureExtras, after stripping the repeated
+ * "CAST " prefix pg_dump's own labelq includes, see dumpCast in
+ * pg_dump.c) and for a COMMENT ON CAST's nested remainder
+ * (parseAclOrCommentRemainder), which has no such prefix to strip
+ * (dumpComment is called with castargs, not labelq).
  */
 static bool
 splitCastTypes(const char *parenText, ArchiveContentItem *item)
 {
-	size_t len = strlen(parenText);
+	archive_toc_lex_cast_body(parenText);
 
-	if (len < 2 || parenText[0] != '(' || parenText[len - 1] != ')')
+	int stopToken;
+	char *source = archiveTocAccumulateWords(&stopToken);
+
+	if (source == NULL)
 	{
 		return false;
 	}
 
-	char inner[2 * PG_NAMEDATALEN + BUFSIZE] = { 0 };
-
-	strlcpy(inner, parenText + 1, sizeof(inner));
-
-	size_t innerLen = strlen(inner);
-
-	if (innerLen > 0)
+	if (stopToken != ARCHIVE_TOC_TOKEN_AS)
 	{
-		inner[innerLen - 1] = '\0';
+		free(source);
+		return false;
 	}
 
-	char *source = NULL;
-	char *target = NULL;
+	char *target = archiveTocAccumulateWords(&stopToken);
 
-	if (!splitOnMarker(inner, " AS ", &source, &target))
+	if (target == NULL)
 	{
+		free(source);
+		return false;
+	}
+
+	if (stopToken != ARCHIVE_TOC_TOKEN_RPAREN && stopToken != ARCHIVE_TOC_TOKEN_EOF)
+	{
+		free(source);
+		free(target);
 		return false;
 	}
 
@@ -426,55 +450,206 @@ splitCastTypes(const char *parenText, ArchiveContentItem *item)
  * COMMENT entry's opaque item->name (already split from its owner by
  * splitAclOrCommentOpaqueNameAndOwner, e.g. "fixture_int_ops_class USING
  * btree") down to the bare object name, moving the access method name
- * into item->accessMethod -- dumpOpclass/dumpOpfamily's own "%s USING
- * %s" shape for an ACL/COMMENT entry's remainder (pg_dump.c; the plain,
- * non-ACL/COMMENT entry has no such suffix at all, see pgcmd.h's own
- * note on accessMethod). Does nothing when the expected " USING " marker
- * isn't found.
+ * into item->accessMethod, via the lexer's own OPCLASSBODY start
+ * condition -- dumpOpclass/dumpOpfamily's own "%s USING %s" shape for an
+ * ACL/COMMENT entry's remainder (pg_dump.c; the plain, non-ACL/COMMENT
+ * entry has no such suffix at all, see pgcmd.h's own note on
+ * accessMethod). Does nothing when the expected " USING " token doesn't
+ * show up where expected.
  */
 static void
 splitOperatorClassFamilyUsing(ArchiveContentItem *item)
 {
-	char *marker = strstr(item->name, " USING ");
+	archive_toc_lex_opclass_body(item->name);
 
-	if (marker == NULL)
+	int stopToken;
+	char *name = archiveTocAccumulateWords(&stopToken);
+
+	if (name == NULL)
 	{
 		return;
 	}
 
-	strlcpy(item->accessMethod, marker + strlen(" USING "),
-			sizeof(item->accessMethod));
+	if (stopToken != ARCHIVE_TOC_TOKEN_USING)
+	{
+		free(name);
+		return;
+	}
 
-	*marker = '\0';
+	char *amname = archiveTocAccumulateWords(&stopToken);
+
+	if (amname == NULL)
+	{
+		free(name);
+		return;
+	}
+
+	if (stopToken != ARCHIVE_TOC_TOKEN_EOF)
+	{
+		free(name);
+		free(amname);
+		return;
+	}
+
+	strlcpy(item->name, name, sizeof(item->name));
+	strlcpy(item->accessMethod, amname, sizeof(item->accessMethod));
+	free(name);
+	free(amname);
 }
 
 
 /*
- * splitTransformNested splits a COMMENT ON TRANSFORM's own nested
- * remainder, "FOR typename LANGUAGE langname" (dumpTransform's own
- * transformargs, no repeated "TRANSFORM " prefix -- unlike the plain
- * top-level entry's labelq, see applyTopLevelSignatureExtras and pg_dump.c),
- * into item->transformType/transformLanguage.
+ * transformSplit splits a TRANSFORM's own "FOR typename LANGUAGE
+ * langname" text into item->transformType/transformLanguage, via the
+ * lexer's own TRANSFORMBODY start condition. Used both for the plain
+ * top-level TRANSFORM entry (applyTopLevelSignatureExtras, after
+ * stripping the repeated "TRANSFORM " prefix pg_dump's own labelq
+ * includes, see dumpTransform in pg_dump.c -- what's left still starts
+ * with "FOR ", same as the nested case below) and for a COMMENT ON
+ * TRANSFORM's nested remainder (parseAclOrCommentRemainder), which has
+ * no such prefix to strip (dumpComment is called with transformargs, not
+ * labelq, but transformargs is itself already "FOR %s LANGUAGE %s").
  */
-static void
-splitTransformNested(ArchiveContentItem *item)
+static bool
+transformSplit(const char *text, ArchiveContentItem *item)
 {
-	const char *prefix = "FOR ";
+	archive_toc_lex_transform_body(text);
 
-	if (strncmp(item->name, prefix, strlen(prefix)) != 0)
+	if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_FOR)
 	{
-		return;
+		return false;
 	}
 
-	char *type = NULL;
-	char *lang = NULL;
+	int stopToken;
+	char *type = archiveTocAccumulateWords(&stopToken);
 
-	if (splitOnMarker(item->name + strlen(prefix), " LANGUAGE ", &type, &lang))
+	if (type == NULL)
 	{
-		item->transformType = type;
-		strlcpy(item->transformLanguage, lang, sizeof(item->transformLanguage));
-		free(lang);
+		return false;
 	}
+
+	if (stopToken != ARCHIVE_TOC_TOKEN_LANGUAGE_KW)
+	{
+		free(type);
+		return false;
+	}
+
+	char *language = archiveTocAccumulateWords(&stopToken);
+
+	if (language == NULL)
+	{
+		free(type);
+		return false;
+	}
+
+	if (stopToken != ARCHIVE_TOC_TOKEN_EOF)
+	{
+		free(type);
+		free(language);
+		return false;
+	}
+
+	item->transformType = type;
+	strlcpy(item->transformLanguage, language, sizeof(item->transformLanguage));
+	free(language);
+
+	return true;
+}
+
+
+/*
+ * userMappingSplit splits a USER MAPPING's own "user SERVER server" text
+ * into item->userMappingUser/userMappingServer, via the lexer's own
+ * USERMAPPINGBODY start condition. A user mapping can't itself be
+ * GRANTed on or COMMENTed on, so this is only ever reached for the plain
+ * top-level entry (applyTopLevelSignatureExtras, after stripping the
+ * repeated "USER MAPPING " prefix pg_dump's own labelq includes, see
+ * dumpUserMappings in pg_dump.c).
+ */
+static bool
+userMappingSplit(const char *text, ArchiveContentItem *item)
+{
+	archive_toc_lex_user_mapping_body(text);
+
+	int stopToken;
+	char *user = archiveTocAccumulateWords(&stopToken);
+
+	if (user == NULL)
+	{
+		return false;
+	}
+
+	if (stopToken != ARCHIVE_TOC_TOKEN_SERVER_KW)
+	{
+		free(user);
+		return false;
+	}
+
+	char *server = archiveTocAccumulateWords(&stopToken);
+
+	if (server == NULL)
+	{
+		free(user);
+		return false;
+	}
+
+	if (stopToken != ARCHIVE_TOC_TOKEN_EOF)
+	{
+		free(user);
+		free(server);
+		return false;
+	}
+
+	strlcpy(item->userMappingUser, user, sizeof(item->userMappingUser));
+	strlcpy(item->userMappingServer, server, sizeof(item->userMappingServer));
+	free(user);
+	free(server);
+
+	return true;
+}
+
+
+/*
+ * defaultAclSplit splits a DEFAULT ACL's own "FOR objecttype" text into
+ * item->defaultAclObjectType, via the lexer's own DEFAULTACLBODY start
+ * condition. objecttype is always exactly one of 6 fixed literals
+ * (TABLES/SEQUENCES/FUNCTIONS/TYPES/SCHEMAS/LARGE OBJECTS, dumpDefaultACL's
+ * own switch, pg_dump.c) -- the last of which is itself two words, so
+ * this still accumulates every WORD left after FOR rather than expecting
+ * exactly one. A default ACL can't itself be GRANTed on or COMMENTed on,
+ * so this is only ever reached for the plain top-level entry
+ * (applyTopLevelSignatureExtras, after stripping the repeated "DEFAULT
+ * PRIVILEGES " prefix pg_dump's own labelq includes).
+ */
+static bool
+defaultAclSplit(const char *text, ArchiveContentItem *item)
+{
+	archive_toc_lex_default_acl_body(text);
+
+	if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_FOR)
+	{
+		return false;
+	}
+
+	int stopToken;
+	char *objectType = archiveTocAccumulateWords(&stopToken);
+
+	if (objectType == NULL)
+	{
+		return false;
+	}
+
+	if (stopToken != ARCHIVE_TOC_TOKEN_EOF)
+	{
+		free(objectType);
+		return false;
+	}
+
+	strlcpy(item->defaultAclObjectType, objectType,
+			sizeof(item->defaultAclObjectType));
+	free(objectType);
+
+	return true;
 }
 
 
@@ -523,19 +698,7 @@ applyTopLevelSignatureExtras(ArchiveContentItem *item)
 
 			if (strncmp(item->name, prefix, strlen(prefix)) == 0)
 			{
-				char *user = NULL;
-				char *server = NULL;
-
-				if (splitOnMarker(item->name + strlen(prefix), " SERVER ",
-								  &user, &server))
-				{
-					strlcpy(item->userMappingUser, user,
-							sizeof(item->userMappingUser));
-					strlcpy(item->userMappingServer, server,
-							sizeof(item->userMappingServer));
-					free(user);
-					free(server);
-				}
+				userMappingSplit(item->name + strlen(prefix), item);
 			}
 
 			break;
@@ -543,12 +706,11 @@ applyTopLevelSignatureExtras(ArchiveContentItem *item)
 
 		case ARCHIVE_TAG_DEFAULT_ACL:
 		{
-			const char *prefix = "DEFAULT PRIVILEGES FOR ";
+			const char *prefix = "DEFAULT PRIVILEGES ";
 
 			if (strncmp(item->name, prefix, strlen(prefix)) == 0)
 			{
-				strlcpy(item->defaultAclObjectType, item->name + strlen(prefix),
-						sizeof(item->defaultAclObjectType));
+				defaultAclSplit(item->name + strlen(prefix), item);
 			}
 
 			break;
@@ -556,21 +718,11 @@ applyTopLevelSignatureExtras(ArchiveContentItem *item)
 
 		case ARCHIVE_TAG_TRANSFORM:
 		{
-			const char *prefix = "TRANSFORM FOR ";
+			const char *prefix = "TRANSFORM ";
 
 			if (strncmp(item->name, prefix, strlen(prefix)) == 0)
 			{
-				char *type = NULL;
-				char *lang = NULL;
-
-				if (splitOnMarker(item->name + strlen(prefix), " LANGUAGE ",
-								  &type, &lang))
-				{
-					item->transformType = type;
-					strlcpy(item->transformLanguage, lang,
-							sizeof(item->transformLanguage));
-					free(lang);
-				}
+				transformSplit(item->name + strlen(prefix), item);
 			}
 
 			break;
@@ -931,24 +1083,26 @@ splitFunctionArgs(const char *argsText, ArchiveContentItem *item)
 static void
 splitPlainFunctionSignature(ArchiveContentItem *item)
 {
-	char *open = strchr(item->name, '(');
-	size_t nameLen = strlen(item->name);
+	archive_toc_lex_function_signature(item->name);
 
-	if (open == NULL || nameLen == 0 || item->name[nameLen - 1] != ')')
+	if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_IDENT)
+	{
+		return;
+	}
+
+	char name[PG_NAMEDATALEN] = { 0 };
+
+	strlcpy(name, archive_toc_ident, sizeof(name));
+
+	if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_ARGS)
 	{
 		return;
 	}
 
 	char argsText[BUFSIZE] = { 0 };
-	size_t argsLen = (item->name + nameLen - 1) - (open + 1);
 
-	if (argsLen >= sizeof(argsText))
-	{
-		return;
-	}
-
-	strlcpy(argsText, open + 1, argsLen + 1);
-	*open = '\0';
+	strlcpy(argsText, archive_toc_args, sizeof(argsText));
+	strlcpy(item->name, name, sizeof(item->name));
 
 	item->signatureArgsText = strdup(argsText);
 
@@ -1208,13 +1362,19 @@ finishOperatorAclOrComment(ArchiveContentItem *item, const char *nspname,
  * none of these own an identifier of their own per archive_toc_object_
  * type_has_ident, so the lexer never switched to OBJTYPEBODY for them),
  * strips its single leading space, and splits it into item->name/owner
- * via splitAclOrCommentOpaqueNameAndOwner. *objTypeRemainderOut is set to
- * the raw (unmodified) text on success, for buildOpaqueAclOrCommentNames
- * below to reproduce verbatim in useListRemainder.
+ * via splitAclOrCommentOpaqueNameAndOwner. *objTypeRemainderOut is set, on
+ * success, to a freshly malloc'ed copy of the raw (unmodified) text --
+ * the caller's to free -- for buildOpaqueAclOrCommentNames below to
+ * reproduce verbatim in useListRemainder. A copy, not archive_toc_text
+ * itself: a caller that goes on to re-arm the lexer on a further-
+ * structured shape of its own (splitCastTypes, transformSplit,
+ * splitOperatorClassFamilyUsing -- each re-enters the lexer on a
+ * different text) would otherwise be left holding a dangling pointer
+ * into a scan buffer that call just freed.
  */
 static bool
 pullOpaqueObjectTypeRemainder(ArchiveContentItem *item,
-							  const char **objTypeRemainderOut)
+							  char **objTypeRemainderOut)
 {
 	if (archive_toc_lex() != ARCHIVE_TOC_TOKEN_REMAINDER)
 	{
@@ -1233,7 +1393,15 @@ pullOpaqueObjectTypeRemainder(ArchiveContentItem *item,
 		return false;
 	}
 
-	*objTypeRemainderOut = objTypeRemainder;
+	char *copy = strdup(objTypeRemainder);
+
+	if (copy == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return false;
+	}
+
+	*objTypeRemainderOut = copy;
 
 	return true;
 }
@@ -1245,7 +1413,7 @@ pullOpaqueObjectTypeRemainder(ArchiveContentItem *item,
  * remainder has already been split into item->name/owner by
  * splitAclOrCommentOpaqueNameAndOwner -- optionally narrowed further by a
  * Phase 4 helper first (splitCastTypes, splitOperatorClassFamilyUsing,
- * splitTransformNested), the same way finishRelationAclOrComment's own
+ * transformSplit), the same way finishRelationAclOrComment's own
  * relname/name narrow restoreListName without losing the full original
  * text, which objTypeRemainder (unmodified raw text, not item->name)
  * still provides to useListRemainder below. Shared by the CAST, TRANSFORM,
@@ -1692,7 +1860,7 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 		case ARCHIVE_TAG_CAST:
 		{
 			/* COMMENT ON CAST only -- a CAST can't be GRANTed on */
-			const char *objTypeRemainder = NULL;
+			char *objTypeRemainder = NULL;
 
 			if (!pullOpaqueObjectTypeRemainder(item, &objTypeRemainder))
 			{
@@ -1701,24 +1869,32 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 			splitCastTypes(item->name, item);
 
-			return buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
-												objTypeRemainder);
+			bool ok = buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
+												   objTypeRemainder);
+
+			free(objTypeRemainder);
+
+			return ok;
 		}
 
 		case ARCHIVE_TAG_TRANSFORM:
 		{
 			/* COMMENT ON TRANSFORM only -- same reason as CAST above */
-			const char *objTypeRemainder = NULL;
+			char *objTypeRemainder = NULL;
 
 			if (!pullOpaqueObjectTypeRemainder(item, &objTypeRemainder))
 			{
 				return false;
 			}
 
-			splitTransformNested(item);
+			transformSplit(item->name, item);
 
-			return buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
-												objTypeRemainder);
+			bool ok = buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
+												   objTypeRemainder);
+
+			free(objTypeRemainder);
+
+			return ok;
 		}
 
 		case ARCHIVE_TAG_OPERATOR_CLASS:
@@ -1730,7 +1906,7 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 			 * access method into item->accessMethod, same "overlapping
 			 * fields" split as CAST/TRANSFORM above (see pgcmd.h).
 			 */
-			const char *objTypeRemainder = NULL;
+			char *objTypeRemainder = NULL;
 
 			if (!pullOpaqueObjectTypeRemainder(item, &objTypeRemainder))
 			{
@@ -1739,8 +1915,12 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 
 			splitOperatorClassFamilyUsing(item);
 
-			return buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
-												objTypeRemainder);
+			bool ok = buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
+												   objTypeRemainder);
+
+			free(objTypeRemainder);
+
+			return ok;
 		}
 
 		default:
@@ -1766,15 +1946,19 @@ parseAclOrCommentRemainder(const char *rawRemainder, ArchiveContentItem *item)
 				return false;
 			}
 
-			const char *objTypeRemainder = NULL;
+			char *objTypeRemainder = NULL;
 
 			if (!pullOpaqueObjectTypeRemainder(item, &objTypeRemainder))
 			{
 				return false;
 			}
 
-			return buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
-												objTypeRemainder);
+			bool ok = buildOpaqueAclOrCommentNames(item, hasNamespace, nspname,
+												   objTypeRemainder);
+
+			free(objTypeRemainder);
+
+			return ok;
 		}
 	}
 }
