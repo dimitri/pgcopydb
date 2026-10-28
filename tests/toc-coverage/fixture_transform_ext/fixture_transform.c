@@ -12,6 +12,7 @@ fixture_transform_from_sql(PG_FUNCTION_ARGS)
 	PG_RETURN_POINTER(PG_GETARG_POINTER(0));
 }
 
+
 Datum
 fixture_transform_to_sql(PG_FUNCTION_ARGS)
 {
