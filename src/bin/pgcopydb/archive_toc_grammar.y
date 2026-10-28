@@ -141,8 +141,17 @@ static void archiveTocArgListAppend(ArchiveArgList *list, char *item);
  */
 %token <oid> OID
 %token UNKNOWN
-%token AS FOR LANGUAGE_KW SERVER_KW USING ON DOMAIN
-%token NO_OWNER
+%token AS LANGUAGE_KW SERVER_KW USING ON DOMAIN
+/*
+ * FOR carries its own start-of-keyword position (set in archive_toc_
+ * lexer.l, like SPACE's own .pos): NESTED_TRANSFORM's body starts
+ * right at "FOR" itself with no intervening nonterminal to anchor a
+ * `mark` on (unlike every other keyword here, always preceded by a
+ * WORD/typename/name that already reduces its own end boundary) --
+ * see NESTED_TRANSFORM's own comment below.
+ */
+%token <pos> FOR
+%token NO_OWNER NO_NSPNAME
 %token <word> WORD LASTWORD
 %token <pos> SPACE
 %token <tag> ACL COMMENT
@@ -155,7 +164,8 @@ static void archiveTocArgListAppend(ArchiveArgList *list, char *item);
 %token <pos> '(' ')' ',' '.'
 
 %type <str> nspname typename paren_group paren_inner
-%type <str> paren_inner_item owner
+%type <str> paren_inner_item owner castSourceType castTargetType
+%type <word> objname
 %type <arglist> arglist args
 %type <pos> mark relname_item relname name
 %type <span> wordname
@@ -165,6 +175,7 @@ static void archiveTocArgListAppend(ArchiveArgList *list, char *item);
 %%
 
 toc_line:
+	/* 277; 1255 16452 FUNCTION toc_fixture fixture_add(integer, integer) postgres */
 	OID ';' OID OID entry
 		{
 			/*
@@ -200,8 +211,34 @@ owner:
 	;
 
 nspname:
-	'-'                            { $$ = NULL; }
+	NO_NSPNAME                    { $$ = NULL; }
 	| WORD                          { $$ = $1.text; }
+	;
+
+/*
+ * objname is WORD's own alias for the quote-aware nested object
+ * identifier (TABLE/VIEW/.../FUNCTION/PROCEDURE/AGGREGATE/OPERATOR's
+ * own name, see archive_toc_lexer.l's TOCQBODY) -- a plain passthrough,
+ * kept as its own nonterminal only so NESTED_RELATION_LIKE/NESTED_
+ * COLUMN/NESTED_ON_RELATION/NESTED_FUNCLIKE/NESTED_OPERATOR's own
+ * productions below read as "this field is the nested object's name",
+ * not an unexplained bare WORD.
+ */
+objname:
+	WORD                            { $$ = $1; }
+	;
+
+/*
+ * castSourceType/castTargetType are typename's own aliases for a
+ * CAST's two sides, (source AS target) -- same production, named for
+ * which side of AS it is in TOP_CAST/NESTED_CAST below.
+ */
+castSourceType:
+	typename                        { $$ = $1; }
+	;
+
+castTargetType:
+	typename                        { $$ = $1; }
 	;
 
 /*
@@ -387,7 +424,8 @@ args:
 	;
 
 entry:
-	ACL nspname SPACE
+	/* 3580; 0 0 ACL - SCHEMA toc_fixture postgres */
+	ACL nspname
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -404,7 +442,8 @@ entry:
 			archive_toc_begin_nested_tag();
 		}
 	  nested_entry
-	| COMMENT nspname SPACE
+	/* 3579; 0 0 COMMENT - SCHEMA toc_fixture postgres */
+	| COMMENT nspname
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -422,7 +461,8 @@ entry:
 		}
 	  nested_entry
 
-	| TOP_SIMPLE nspname SPACE mark name owner
+	/* 9; 2615 16401 SCHEMA - toc_fixture postgres */
+	| TOP_SIMPLE nspname mark name owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -434,13 +474,14 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			char *body = archiveTocSlice($4, $5);
-			archiveTocBuildSimpleNames(item, body, $6);
+			char *body = archiveTocSlice($3, $4);
+			archiveTocBuildSimpleNames(item, body, $5);
 			free(body);
-			free($6);
+			free($5);
 		}
 
-	| TOP_RELATION nspname SPACE mark relname SPACE name owner
+	/* 3396; 2604 16420 DEFAULT toc_fixture child id postgres */
+	| TOP_RELATION nspname mark relname SPACE name owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -473,18 +514,19 @@ entry:
 			 * every other top-level shape -- overridden right after,
 			 * covering both fields at once.
 			 */
-			char *relname = archiveTocSlice($4, $5);
-			char *name = archiveTocSlice($6, $7);
+			char *relname = archiveTocSlice($3, $4);
+			char *name = archiveTocSlice($5, $6);
 
-			archiveTocBuildRelationNames(item, relname, name, $8);
-			archiveTocOverrideRestoreListName(item, $4, $7, $8);
+			archiveTocBuildRelationNames(item, relname, name, $7);
+			archiveTocOverrideRestoreListName(item, $3, $6, $7);
 
 			free(relname);
 			free(name);
-			free($8);
+			free($7);
 		}
 
-	| TOP_FUNCLIKE nspname SPACE mark wordname '(' arglist ')' mark owner
+	/* 277; 1255 16452 FUNCTION toc_fixture fixture_add(integer, integer) postgres */
+	| TOP_FUNCLIKE nspname mark wordname '(' arglist ')' mark owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -496,40 +538,41 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			bool isStar = ($7.count == 1 && streq($7.items[0], "*"));
+			bool isStar = ($6.count == 1 && streq($6.items[0], "*"));
 
 			if (isStar)
 			{
-				free($7.items[0]);
-				free($7.items);
+				free($6.items[0]);
+				free($6.items);
 				item->signatureArgs = NULL;
 				item->signatureArgsCount = 0;
 			}
 			else
 			{
-				item->signatureArgs = $7.items;
-				item->signatureArgsCount = $7.count;
+				item->signatureArgs = $6.items;
+				item->signatureArgsCount = $6.count;
 			}
 
-			item->signatureArgsText = $7.text;
+			item->signatureArgsText = $6.text;
 
 			/*
 			 * item->name stays narrowed to the bare function name
-			 * ($5.text, matching the previous revision's own
+			 * ($4.text, matching the previous revision's own
 			 * splitPlainFunctionSignature contract), but restoreListName
 			 * keeps the FULL verbatim text, signature included --
 			 * every other top-level shape's own raw-remainder-preserved
 			 * behavior, overridden here since archiveTocBuildSimpleNames
 			 * would otherwise build it from the already-narrowed name.
 			 */
-			archiveTocBuildSimpleNames(item, $5.text, $10);
-			archiveTocOverrideRestoreListName(item, $4, $9, $10);
+			archiveTocBuildSimpleNames(item, $4.text, $9);
+			archiveTocOverrideRestoreListName(item, $3, $8, $9);
 
-			free($5.text);
-			free($10);
+			free($4.text);
+			free($9);
 		}
 
-	| TOP_OPERATOR nspname SPACE WORD owner
+	/* 1733; 2617 16459 OPERATOR toc_fixture === postgres */
+	| TOP_OPERATOR nspname WORD owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -541,15 +584,16 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			archiveTocBuildSimpleNames(item, $4.text, $5);
-			free($4.text);
-			free($5);
+			archiveTocBuildSimpleNames(item, $3.text, $4);
+			free($3.text);
+			free($4);
 		}
 
-	| TOP_CAST nspname SPACE mark WORD SPACE '(' typename SPACE AS SPACE typename ')' mark owner
+	/* 3391; 2605 16471 CAST - CAST (toc_fixture.positive_int AS integer)  */
+	| TOP_CAST nspname mark WORD SPACE '(' castSourceType AS castTargetType ')' mark owner
 		{
 			/*
-			 * $5 (the repeated "CAST " tag text pg_dump's own labelq
+			 * $4 (the repeated "CAST " tag text pg_dump's own labelq
 			 * includes, see dumpCast in pg_dump.c) is a plain WORD,
 			 * not wordname: unlike FUNCTION's own name, it is always
 			 * exactly this one fixed word, never multi-word -- using
@@ -558,12 +602,9 @@ entry:
 			 * continuing a longer name, which LALR(1) can't walk back
 			 * out of (it would need to see one more token, WORD vs
 			 * '(', before deciding whether to shift that
-			 * space). The explicit SPACE around AS matters for
-			 * the exact same reason: without it, after the source
-			 * typename reduces, the only registered continuation for a
-			 * SPACE lookahead is typename's OWN "more words" rule,
-			 * so it shifts that space expecting another WORD and
-			 * then chokes on the real AS that follows.
+			 * space). AS now consumes its own surrounding whitespace
+			 * (see archive_toc_lexer.l's TOCBODY), so no explicit SPACE
+			 * is needed around it here any more.
 			 */
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -575,22 +616,23 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			item->castSourceType = strdup($8);
-			item->castTargetType = strdup($12);
+			item->castSourceType = strdup($7);
+			item->castTargetType = strdup($9);
 
-			char *body = archiveTocSlice($4, $14);
-			archiveTocBuildSimpleNames(item, body, $15);
+			char *body = archiveTocSlice($3, $11);
+			archiveTocBuildSimpleNames(item, body, $12);
 			free(body);
 
-			free($5.text);
-			free($8);
+			free($4.text);
+			free($7);
+			free($9);
 			free($12);
-			free($15);
 		}
 
-	| TOP_TRANSFORM nspname SPACE mark WORD SPACE FOR SPACE typename SPACE LANGUAGE_KW SPACE WORD mark owner
+	/* 3392; 3576 16582 TRANSFORM - TRANSFORM FOR integer LANGUAGE plpgsql  */
+	| TOP_TRANSFORM nspname mark WORD FOR typename LANGUAGE_KW WORD mark owner
 		{
-			/* $5: same reasoning as TOP_CAST's own $5, above. */
+			/* $4: same reasoning as TOP_CAST's own $4, above. */
 			item->desc = $1.desc;
 			item->description = $1.text;
 			item->shape = ARCHIVE_SHAPE_OPAQUE;
@@ -601,21 +643,22 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			item->transformType = strdup($9);
-			strlcpy(item->transformLanguage, $13.text,
+			item->transformType = strdup($6);
+			strlcpy(item->transformLanguage, $8.text,
 					sizeof(item->transformLanguage));
 
-			char *body = archiveTocSlice($4, $14);
-			archiveTocBuildSimpleNames(item, body, $15);
+			char *body = archiveTocSlice($3, $9);
+			archiveTocBuildSimpleNames(item, body, $10);
 			free(body);
 
-			free($5.text);
-			free($9);
-			free($13.text);
-			free($15);
+			free($4.text);
+			free($6);
+			free($8.text);
+			free($10);
 		}
 
-	| TOP_USER_MAPPING nspname SPACE mark WORD SPACE WORD SPACE WORD SPACE SERVER_KW SPACE WORD mark owner
+	/* 3602; 0 0 USER MAPPING - USER MAPPING postgres SERVER fixture_server postgres */
+	| TOP_USER_MAPPING nspname mark WORD SPACE WORD SPACE WORD SERVER_KW WORD mark owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -627,23 +670,24 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			strlcpy(item->userMappingUser, $9.text,
+			strlcpy(item->userMappingUser, $8.text,
 					sizeof(item->userMappingUser));
-			strlcpy(item->userMappingServer, $13.text,
+			strlcpy(item->userMappingServer, $10.text,
 					sizeof(item->userMappingServer));
 
-			char *body = archiveTocSlice($4, $14);
-			archiveTocBuildSimpleNames(item, body, $15);
+			char *body = archiveTocSlice($3, $11);
+			archiveTocBuildSimpleNames(item, body, $12);
 			free(body);
 
-			free($5.text);
-			free($7.text);
-			free($9.text);
-			free($13.text);
-			free($15);
+			free($4.text);
+			free($6.text);
+			free($8.text);
+			free($10.text);
+			free($12);
 		}
 
-	| TOP_DEFAULT_ACL nspname SPACE mark WORD SPACE WORD SPACE FOR SPACE wordname owner
+	/* 2151; 826 16584 DEFAULT ACL toc_fixture DEFAULT PRIVILEGES FOR TABLES postgres */
+	| TOP_DEFAULT_ACL nspname mark WORD SPACE WORD FOR wordname owner
 		{
 			item->desc = $1.desc;
 			item->description = $1.text;
@@ -655,11 +699,11 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			strlcpy(item->defaultAclObjectType, $11.text,
+			strlcpy(item->defaultAclObjectType, $8.text,
 					sizeof(item->defaultAclObjectType));
 
 			/*
-			 * bodyEnd comes from wordname's own $11.end (set when its
+			 * bodyEnd comes from wordname's own $8.end (set when its
 			 * last WORD was lexed, see archive_toc_lexer.l), not a
 			 * trailing `mark` here: wordname's own recursive rule and
 			 * owner's "has an owner" rule both start with
@@ -672,14 +716,14 @@ entry:
 			 * Reading the end position off wordname's own already-
 			 * captured value sidesteps the conflict entirely.
 			 */
-			char *body = archiveTocSlice($4, $11.end);
-			archiveTocBuildSimpleNames(item, body, $12);
+			char *body = archiveTocSlice($3, $8.end);
+			archiveTocBuildSimpleNames(item, body, $9);
 			free(body);
 
-			free($5.text);
-			free($7.text);
-			free($11.text);
-			free($12);
+			free($4.text);
+			free($6.text);
+			free($8.text);
+			free($9);
 		}
 	;
 
@@ -694,7 +738,8 @@ entry:
  * one, already consumed, covers it).
  */
 nested_entry:
-	NESTED_RELATION_LIKE SPACE mark WORD mark owner
+	/* 3605; 0 0 COMMENT toc_fixture TABLE parent postgres */
+	NESTED_RELATION_LIKE SPACE mark objname mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -704,7 +749,8 @@ nested_entry:
 			free($6);
 		}
 
-	| NESTED_COLUMN SPACE mark WORD '.' WORD mark owner
+	/* 3606; 0 0 COMMENT toc_fixture COLUMN parent.name postgres */
+	| NESTED_COLUMN SPACE mark objname '.' objname mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -715,18 +761,20 @@ nested_entry:
 			free($8);
 		}
 
-	| NESTED_ON_RELATION SPACE mark WORD SPACE ON SPACE WORD mark owner
+	/* 3618; 0 0 COMMENT toc_fixture TRIGGER parent_trg ON parent postgres */
+	| NESTED_ON_RELATION SPACE mark objname ON objname mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
-			archiveTocBuildRelationNames(item, $8.text, $4.text, $10);
-			archiveTocBuildUseListRemainder(item, $3, $9, $10);
+			archiveTocBuildRelationNames(item, $6.text, $4.text, $8);
+			archiveTocBuildUseListRemainder(item, $3, $7, $8);
 			free($4.text);
-			free($8.text);
-			free($10);
+			free($6.text);
+			free($8);
 		}
 
-	| NESTED_FUNCLIKE SPACE mark WORD '(' arglist ')' mark owner
+	/* 3589; 0 0 COMMENT toc_fixture FUNCTION fixture_add(a integer, b integer) postgres */
+	| NESTED_FUNCLIKE SPACE mark objname '(' arglist ')' mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -754,7 +802,8 @@ nested_entry:
 			free($9);
 		}
 
-	| NESTED_OPERATOR SPACE mark WORD SPACE '(' typename ',' SPACE typename ')' mark owner
+	/* 3594; 0 0 COMMENT toc_fixture OPERATOR === (integer, integer) postgres */
+	| NESTED_OPERATOR SPACE mark objname SPACE '(' typename ',' SPACE typename ')' mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
@@ -770,51 +819,66 @@ nested_entry:
 			free($13);
 		}
 
-	| NESTED_CAST SPACE mark '(' typename SPACE AS SPACE typename ')' mark owner
+	/* 3587; 0 0 COMMENT - CAST (toc_fixture.positive_int AS integer)  */
+	| NESTED_CAST SPACE mark '(' castSourceType AS castTargetType ')' mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
 			item->castSourceType = strdup($5);
-			item->castTargetType = strdup($9);
+			item->castTargetType = strdup($7);
 
-			char *body = archiveTocSlice($3, $11);
+			char *body = archiveTocSlice($3, $9);
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
-									   body, $12);
-			archiveTocBuildUseListRemainder(item, $3, $11, $12);
+									   body, $10);
+			archiveTocBuildUseListRemainder(item, $3, $9, $10);
 			free(body);
 
 			free($5);
-			free($9);
-			free($12);
+			free($7);
+			free($10);
 		}
 
-	| NESTED_TRANSFORM SPACE mark FOR SPACE typename SPACE LANGUAGE_KW SPACE WORD mark owner
+	/* 3583; 0 0 COMMENT - TRANSFORM FOR integer LANGUAGE plpgsql  */
+	| NESTED_TRANSFORM FOR typename LANGUAGE_KW WORD mark owner
 		{
+			/*
+			 * No leading SPACE/mark here, unlike every other nested
+			 * production: FOR's own lexer pattern (archive_toc_lexer.l's
+			 * TOCBODY) already consumes the one space separating the
+			 * "TRANSFORM" tag from it, so there is no separate SPACE
+			 * token left for the grammar to expect, and no WORD/typename
+			 * reduction immediately before FOR to anchor a `mark` on
+			 * (unlike TOP_TRANSFORM's own repeated tag WORD) -- FOR's
+			 * own <pos> value (its start-of-keyword position, not
+			 * archive_toc_token_end) is this production's body-start
+			 * boundary instead.
+			 */
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			item->transformType = strdup($6);
-			strlcpy(item->transformLanguage, $10.text,
+			item->transformType = strdup($3);
+			strlcpy(item->transformLanguage, $5.text,
 					sizeof(item->transformLanguage));
 
-			char *body = archiveTocSlice($3, $11);
+			char *body = archiveTocSlice($2, $6);
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
-									   body, $12);
-			archiveTocBuildUseListRemainder(item, $3, $11, $12);
+									   body, $7);
+			archiveTocBuildUseListRemainder(item, $2, $6, $7);
 			free(body);
 
-			free($6);
-			free($10.text);
-			free($12);
+			free($3);
+			free($5.text);
+			free($7);
 		}
 
-	| NESTED_OPCLASS_FAMILY SPACE mark name SPACE USING SPACE WORD mark owner
+	/* 3596; 0 0 COMMENT toc_fixture OPERATOR FAMILY fixture_int_ops USING btree postgres */
+	| NESTED_OPCLASS_FAMILY SPACE mark name USING WORD mark owner
 		{
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			strlcpy(item->accessMethod, $8.text, sizeof(item->accessMethod));
+			strlcpy(item->accessMethod, $6.text, sizeof(item->accessMethod));
 
 			/*
 			 * item->name/restoreListName use the NARROWED name, sliced
@@ -826,14 +890,15 @@ nested_entry:
 			char *opclassName = archiveTocSlice($3, $4);
 
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
-									   opclassName, $10);
-			archiveTocBuildUseListRemainder(item, $3, $9, $10);
+									   opclassName, $8);
+			archiveTocBuildUseListRemainder(item, $3, $7, $8);
 
 			free(opclassName);
-			free($8.text);
-			free($10);
+			free($6.text);
+			free($8);
 		}
 
+	/* 3582; 0 0 COMMENT - EXTENSION fixture_transform  */
 	| NESTED_EXTENSION SPACE mark WORD mark owner
 		{
 			item->objectType = $1.desc;
@@ -859,6 +924,7 @@ nested_entry:
 			free($6);
 		}
 
+	/* 3581; 0 0 COMMENT toc_fixture COLLATION fixture_collation postgres */
 	| NESTED_GENERIC SPACE mark name owner
 		{
 			item->objectType = $1.desc;

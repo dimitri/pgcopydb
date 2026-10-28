@@ -235,8 +235,29 @@ const char *archive_toc_token_end;
 
 <NAMESPACE>{
 
-"-"                                { BEGIN(TOCBODY); return '-'; }
-[^ \n]+                            { BEGIN(TOCBODY);
+  /*
+   * Both rules consume their own mandatory trailing separator space
+   * directly (sanitize_line() -- see dumputils.c -- always prints
+   * exactly one, namespace/name/owner's own common separator): nothing
+   * else ever needs to see that one space as its own token, so folding
+   * it in here means every grammar rule using `nspname` doesn't have to
+   * spell out a SPACE right after it.
+   *
+   * "-" specifically is sanitize_line(te->namespace, true)'s own literal
+   * substitution for a NULL te->namespace (see PrintTOCSummary in
+   * pg_backup_archiver.c) -- not a value to pass through, a POSITION
+   * that means "this object has no schema" (a global object: SCHEMA,
+   * DATABASE, EXTENSION, PUBLICATION, SUBSCRIPTION, USER MAPPING, CAST,
+   * TRANSFORM, EVENT TRIGGER, SERVER, FOREIGN DATA WRAPPER, ...) --
+   * mirroring NO_OWNER's own token for the exact same idiom one field
+   * over (PrintTOCSummary's sanitize_line(te->owner, false) call uses
+   * want_hyphen=false there, so an absent owner is never "-", only ever
+   * this trailing-space convention; absent namespace is the only field
+   * that ever uses the literal hyphen).
+   */
+"-"" "                             { BEGIN(TOCBODY); return NO_NSPNAME; }
+[^ \n]+" "                         { BEGIN(TOCBODY);
+                                     yytext[yyleng - 1] = '\0';
                                      archive_toc_lval.word.text = strdup(yytext);
                                      archive_toc_lval.word.quoted = false;
                                      archive_toc_lval.word.end = archive_toc_token_end;
@@ -247,6 +268,38 @@ const char *archive_toc_token_end;
 <TOCBODY>{
 
 " "+$                              { return NO_OWNER; }
+
+  /*
+   * Each of these six keywords is this format's own fixed separator for
+   * exactly one further-structured shape (CAST's " AS ", TRANSFORM's own
+   * "FOR ... LANGUAGE ...", USER MAPPING's " SERVER ", DEFAULT ACL's
+   * "FOR ...", an OPERATOR CLASS/FAMILY ACL/COMMENT's " USING ", a
+   * relation-owned ACL/COMMENT object's " ON " -- see pg_dump.c's own
+   * dumpCast/dumpTransform/dumpUserMappings/dumpDefaultACL/dumpOpclass/
+   * dumpOpfamily), always with exactly the single space pg_dump's own
+   * fixed sprintf()-style formatting puts on each side. Matching ALL of
+   * that (keyword and both surrounding runs of whitespace) as one token
+   * means the grammar itself never has to spell out an explicit SPACE
+   * around any of them (see archive_toc_grammar.y's own file header) --
+   * "one or more spaces" on each side rather than hard-coding exactly
+   * one still correctly handles a hand-edited file with irregular
+   * spacing, at the cost of no longer being able to tell such a file
+   * apart from a normal one. Flex's own longest-match rule means these
+   * six patterns always win over the generic WORD rule below wherever
+   * they apply, so archive_toc_word_or_keyword_token's own classifier
+   * no longer needs (or has) entries for any of them -- DOMAIN is the
+   * only keyword left that genuinely needs post-match recognition,
+   * since it has no surrounding-whitespace convention of its own to
+   * bake into a dedicated pattern.
+   */
+" "+"AS"" "+                       { return AS; }
+" "+"FOR"" "+                      { archive_toc_lval.pos = yytext + strspn(yytext, " ");
+                                     return FOR; }
+" "+"LANGUAGE"" "+                 { return LANGUAGE_KW; }
+" "+"SERVER"" "+                   { return SERVER_KW; }
+" "+"USING"" "+                    { return USING; }
+" "+"ON"" "+                       { return ON; }
+
 " "+                               { archive_toc_lval.pos = archive_toc_token_end;
                                      return SPACE; }
 
@@ -267,6 +320,10 @@ const char *archive_toc_token_end;
 <TOCQBODY>{
 
 " "+$                              { return NO_OWNER; }
+
+  /* NESTED_ON_RELATION's own " ON " separator -- see TOCBODY's own rule. */
+" "+"ON"" "+                       { return ON; }
+
 " "+                               { archive_toc_lval.pos = archive_toc_token_end;
                                      return SPACE; }
 
@@ -547,12 +604,6 @@ archive_toc_word_or_keyword_token(bool isLast)
 		const char *word;
 		int token;
 	} keywords[] = {
-		{ "AS", AS },
-		{ "FOR", FOR },
-		{ "LANGUAGE", LANGUAGE_KW },
-		{ "SERVER", SERVER_KW },
-		{ "USING", USING },
-		{ "ON", ON },
 		{ "DOMAIN", DOMAIN }
 	};
 
