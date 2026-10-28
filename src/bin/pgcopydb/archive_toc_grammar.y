@@ -457,7 +457,17 @@ entry:
 		}
 	  nested_entry
 
-	/* 9; 2615 16401 SCHEMA - toc_fixture postgres */
+	/*
+	 * TOP_SIMPLE is a shape, not a keyword: archive_toc_tag_token's own
+	 * default case, every top-level tag with no further structure of
+	 * its own (TABLE, VIEW, DOMAIN, COLLATION, ... alongside SCHEMA
+	 * below) reduces here, the same way TOP_RELATION/TOP_FUNCLIKE below
+	 * group several keywords under one shape each -- item->description
+	 * still carries the actual keyword text, off $1.text.
+	 *
+	 * 9; 2615 16401 SCHEMA - toc_fixture postgres
+	 * 2210; 3456 16472 COLLATION toc_fixture fixture_collation postgres
+	 */
 	| TOP_SIMPLE nspname mark name owner
 		{
 			item->desc = $1.desc;
@@ -475,7 +485,22 @@ entry:
 			free($5);
 		}
 
-	/* 3396; 2604 16420 DEFAULT toc_fixture child id postgres */
+	/*
+	 * TOP_RELATION is a shape too, grouping every top-level tag whose
+	 * remainder is "owning relation, own name, owner" -- ATTRDEF/
+	 * DEFAULT, CHECK CONSTRAINT, CONSTRAINT, FK CONSTRAINT, INDEX
+	 * ATTACH, POLICY, PUBLICATION TABLE(S IN SCHEMA), RULE, TABLE
+	 * ATTACH, TRIGGER (see archive_toc_tag_token's own switch) -- not
+	 * just DEFAULT, despite the token's own name reading like one
+	 * keyword among many others nearby that each got their own token
+	 * (TOP_CAST, TOP_TRANSFORM, ...): those are per-keyword because
+	 * each is the only tag with that exact shape; this one covers
+	 * eleven keywords that all share this one.
+	 *
+	 * 3396; 2604 16420 DEFAULT toc_fixture child id postgres
+	 * 3404; 2606 16424 FK CONSTRAINT toc_fixture child child_parent_id_fkey postgres
+	 * 3405; 2620 16431 TRIGGER toc_fixture parent parent_trg postgres
+	 */
 	| TOP_RELATION nspname mark relname SPACE name owner
 		{
 			item->desc = $1.desc;
@@ -518,7 +543,14 @@ entry:
 			free($7);
 		}
 
-	/* 277; 1255 16452 FUNCTION toc_fixture fixture_add(integer, integer) postgres */
+	/*
+	 * TOP_FUNCLIKE is likewise FUNCTION/PROCEDURE/AGGREGATE sharing one
+	 * shape (own name plus a parenthesized argument list):
+	 *
+	 * 277; 1255 16452 FUNCTION toc_fixture fixture_add(integer, integer) postgres
+	 * 232; 1255 16453 PROCEDURE toc_fixture fixture_proc(integer) postgres
+	 * 932; 1255 16454 AGGREGATE toc_fixture fixture_concat(text) postgres
+	 */
 	| TOP_FUNCLIKE nspname mark wordname '(' arglist ')' mark owner
 		{
 			item->desc = $1.desc;
@@ -712,7 +744,18 @@ entry:
  * one, already consumed, covers it).
  */
 nested_entry:
-	/* 3605; 0 0 COMMENT toc_fixture TABLE parent postgres */
+	/*
+	 * NESTED_RELATION_LIKE groups TABLE/VIEW/MATERIALIZED VIEW/FOREIGN
+	 * TABLE/INDEX/SEQUENCE: every object type whose own ACL/COMMENT
+	 * remainder is just its bare name, no further structure --
+	 * same "shape token, not a keyword token" idea as TOP_RELATION/
+	 * TOP_FUNCLIKE above, one level narrower (see this comment's own
+	 * header on nested_entry vs entry).
+	 *
+	 * 3605; 0 0 COMMENT toc_fixture TABLE parent postgres
+	 * 3610; 0 0 COMMENT toc_fixture VIEW parent_view postgres
+	 * 3611; 0 0 COMMENT toc_fixture SEQUENCE standalone_seq postgres
+	 */
 	NESTED_RELATION_LIKE mark objname mark owner
 		{
 			item->objectType = $1.desc;
@@ -735,7 +778,14 @@ nested_entry:
 			free($7);
 		}
 
-	/* 3618; 0 0 COMMENT toc_fixture TRIGGER parent_trg ON parent postgres */
+	/*
+	 * NESTED_ON_RELATION groups CONSTRAINT/TRIGGER/POLICY/RULE: every
+	 * object type whose ACL/COMMENT remainder names an owning relation
+	 * after "ON", same shape-token idea as above.
+	 *
+	 * 3618; 0 0 COMMENT toc_fixture TRIGGER parent_trg ON parent postgres
+	 * 3617; 0 0 COMMENT toc_fixture RULE child_rule ON child postgres
+	 */
 	| NESTED_ON_RELATION mark objname ON objname mark owner
 		{
 			item->objectType = $1.desc;
@@ -747,7 +797,14 @@ nested_entry:
 			free($7);
 		}
 
-	/* 3589; 0 0 COMMENT toc_fixture FUNCTION fixture_add(a integer, b integer) postgres */
+	/*
+	 * NESTED_FUNCLIKE: FUNCTION/PROCEDURE/AGGREGATE again, same shape
+	 * token as TOP_FUNCLIKE above, one level narrower.
+	 *
+	 * 3589; 0 0 COMMENT toc_fixture FUNCTION fixture_add(a integer, b integer) postgres
+	 * 3590; 0 0 COMMENT toc_fixture PROCEDURE fixture_proc(IN a integer) postgres
+	 * 3592; 0 0 COMMENT toc_fixture AGGREGATE fixture_concat(text) postgres
+	 */
 	| NESTED_FUNCLIKE mark objname '(' arglist ')' mark owner
 		{
 			item->objectType = $1.desc;
@@ -897,7 +954,16 @@ nested_entry:
 			free($5);
 		}
 
-	/* 3581; 0 0 COMMENT toc_fixture COLLATION fixture_collation postgres */
+	/*
+	 * NESTED_GENERIC is archive_toc_tag_token's own nested default
+	 * case, the same role TOP_SIMPLE plays at the top level: every
+	 * object type nested inside an ACL/COMMENT with no further
+	 * structure of its own (STATISTICS, DOMAIN, ... alongside
+	 * COLLATION below).
+	 *
+	 * 3581; 0 0 COMMENT toc_fixture COLLATION fixture_collation postgres
+	 * 3616; 0 0 COMMENT toc_fixture STATISTICS fixture_stats postgres
+	 */
 	| NESTED_GENERIC mark name owner
 		{
 			item->objectType = $1.desc;
