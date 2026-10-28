@@ -1164,12 +1164,10 @@ cli_copy_db_getopts(int argc, char **argv)
 			case 1007:      /* --max-restarts */
 			{
 				if (!stringToInt(optarg, &options.maxRestarts) ||
-					options.maxRestarts < 0 ||
-					options.maxRestarts > FOLLOW_MAX_RESTARTS_LIMIT)
+					options.maxRestarts < -1)
 				{
 					log_fatal("Failed to parse --max-restarts, "
-							  "expected a number between 0 and %d: \"%s\"",
-							  FOLLOW_MAX_RESTARTS_LIMIT,
+							  "expected a number, -1 for no limit: \"%s\"",
 							  optarg);
 					++errors;
 				}

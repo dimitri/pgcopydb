@@ -787,9 +787,11 @@ The following options are available to ``pgcopydb clone``:
 
   The restarts are limited the way Erlang/OTP supervisors limit them: when
   the sub-processes have been restarted ``--max-restarts`` times (default
-  5) within the last ``--restart-window`` seconds (default 300), the
+  5) within ``--restart-window`` seconds (default 300) of the first one, the
   failure is not transient, and ``pgcopydb follow`` exits with the error.
-  Use ``--max-restarts 0`` to exit on the first failure.
+  Use ``--max-restarts 0`` to exit on the first failure, and
+  ``--max-restarts -1`` to restart without a limit. The window starts at the
+  first failure; a failure that comes after it has elapsed starts a new one.
 
 --endpos
 

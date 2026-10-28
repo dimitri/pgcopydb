@@ -105,12 +105,11 @@
 
 /*
  * pgcopydb follow restarts its receive and apply sub-processes when one of
- * them fails: at most FOLLOW_MAX_RESTARTS restarts within any window of
- * FOLLOW_RESTART_WINDOW seconds, backing off between FOLLOW_RESTART_BASE_SLEEP
- * and FOLLOW_RESTART_CAP_SLEEP milliseconds in between.
+ * them fails: at most FOLLOW_MAX_RESTARTS restarts within FOLLOW_RESTART_WINDOW
+ * seconds, backing off between FOLLOW_RESTART_BASE_SLEEP and
+ * FOLLOW_RESTART_CAP_SLEEP milliseconds in between.
  */
 #define FOLLOW_MAX_RESTARTS 5
-#define FOLLOW_MAX_RESTARTS_LIMIT 100
 #define FOLLOW_RESTART_WINDOW 300                  /* seconds */
 #define FOLLOW_RESTART_BASE_SLEEP 1000             /* milliseconds */
 #define FOLLOW_RESTART_CAP_SLEEP (30 * 1000)       /* milliseconds */

@@ -301,106 +301,6 @@ follow_get_sentinel(StreamSpecs *specs, CopyDBSentinel *sentinel, bool verbose)
 
 
 /*
- * FollowRestartPolicy implements the restart intensity limit that Erlang/OTP
- * supervisors use (MaxR restarts within MaxT seconds): the sub-processes are
- * restarted when they fail, with a decorrelated jitter backoff in between, as
- * long as there have been fewer than maxRestarts restarts in the last
- * windowSeconds seconds. Beyond that the failure is not transient, and we
- * give up and let the operator (or the init system) deal with it.
- */
-typedef struct FollowRestartPolicy
-{
-	int maxRestarts;
-	int windowSeconds;
-
-	time_t history[FOLLOW_MAX_RESTARTS_LIMIT];
-	int count;
-
-	ConnectionRetryPolicy backoff;
-} FollowRestartPolicy;
-
-
-/*
- * follow_restart_policy_init initializes a restart policy.
- */
-static void
-follow_restart_policy_init(FollowRestartPolicy *policy,
-						   int maxRestarts,
-						   int windowSeconds)
-{
-	policy->maxRestarts = maxRestarts;
-	policy->windowSeconds = windowSeconds;
-	policy->count = 0;
-
-	(void) pgsql_set_retry_policy(&(policy->backoff),
-								  windowSeconds,
-								  -1, /* we count restarts ourselves */
-								  FOLLOW_RESTART_CAP_SLEEP,
-								  FOLLOW_RESTART_BASE_SLEEP);
-
-	policy->backoff.sleepTime = FOLLOW_RESTART_BASE_SLEEP;
-}
-
-
-/*
- * follow_restart_policy_allows records a restart at the current time and
- * returns true when the policy allows it: fewer than maxRestarts restarts
- * happened in the last windowSeconds seconds. The number of restarts in the
- * window is returned in restarts.
- */
-static bool
-follow_restart_policy_allows(FollowRestartPolicy *policy, int *restarts)
-{
-	time_t now = time(NULL);
-	int kept = 0;
-
-	/* forget about the restarts that are out of the window */
-	for (int i = 0; i < policy->count; i++)
-	{
-		if (now - policy->history[i] < policy->windowSeconds)
-		{
-			policy->history[kept++] = policy->history[i];
-		}
-	}
-
-	policy->count = kept;
-
-	if (policy->count >= policy->maxRestarts)
-	{
-		*restarts = policy->count;
-		return false;
-	}
-
-	policy->history[policy->count++] = now;
-	*restarts = policy->count;
-
-	return true;
-}
-
-
-/*
- * follow_restart_backoff sleeps for the policy's next backoff time, and
- * returns early when we have been asked to terminate.
- */
-static void
-follow_restart_backoff(FollowRestartPolicy *policy, int *sleepTimeMs)
-{
-	*sleepTimeMs = pgsql_compute_connection_retry_sleep_time(&(policy->backoff));
-
-	/* sleep in short steps so that we notice signals */
-	for (int slept = 0; slept < *sleepTimeMs; slept += 100)
-	{
-		if (asked_to_quit || asked_to_stop || asked_to_stop_fast)
-		{
-			return;
-		}
-
-		pg_usleep(100 * 1000);
-	}
-}
-
-
-/*
  * follow_main_loop implements the main loop for the follow sub-process
  * management. It loops between two modes of operations:
  *
@@ -413,7 +313,7 @@ follow_restart_backoff(FollowRestartPolicy *policy, int *sleepTimeMs)
  *
  * When a sub-process ends abnormally then the main process terminates the
  * sibling worker processes and starts them all again, unless it already did so
- * --max-restarts times in the last --restart-window seconds. This takes care
+ * --max-restarts times within --restart-window seconds. This takes care
  * of the failures that come and go by themselves: a lost connection to the
  * source or the target, a server restart, a failover to a standby that has
  * the replication slot. The receive process resumes at the sentinel
@@ -445,11 +345,21 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 	 * communication and the three workers can restart in the same mode every
 	 * time.
 	 */
-	FollowRestartPolicy restartPolicy = { 0 };
 
-	follow_restart_policy_init(&restartPolicy,
-							   copyDBoptions.maxRestarts,
-							   copyDBoptions.restartWindow);
+	/*
+	 * Restart the sub-processes when they fail, at most maxRestarts times
+	 * within restartWindow seconds (the Erlang/OTP supervisor MaxR/MaxT
+	 * rule), using the same retry policy as the connection retries.
+	 */
+	ConnectionRetryPolicy restartPolicy = { 0 };
+
+	(void) pgsql_set_retry_policy(&restartPolicy,
+								  copyDBoptions.restartWindow,
+								  copyDBoptions.maxRestarts,
+								  FOLLOW_RESTART_CAP_SLEEP,
+								  FOLLOW_RESTART_BASE_SLEEP);
+
+	restartPolicy.sleepTime = FOLLOW_RESTART_BASE_SLEEP;
 
 	while (true)
 	{
@@ -469,8 +379,6 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 			 * too often already.
 			 */
 			bool done = false;
-			int restarts = 0;
-			int sleepTimeMs = 0;
 
 			if (catalog_open(streamSpecs->sourceDB) &&
 				follow_reached_endpos(streamSpecs, &done) && done)
@@ -478,24 +386,38 @@ follow_main_loop(CopyDataSpec *copySpecs, StreamSpecs *streamSpecs)
 				return true;
 			}
 
-			if (!follow_restart_policy_allows(&restartPolicy, &restarts))
+			/* maxRestarts = 0 means no restart at all */
+			(void) pgsql_retry_policy_renew(&restartPolicy);
+
+			if (copyDBoptions.maxRestarts == 0 ||
+				pgsql_retry_policy_expired(&restartPolicy))
 			{
-				log_error("Follow has already been restarted %d times in the "
-						  "last %d seconds, giving up (see --max-restarts and "
+				log_error("Follow has already been restarted %d times "
+						  "within %d seconds, giving up (see --max-restarts and "
 						  "--restart-window)",
-						  restarts,
-						  restartPolicy.windowSeconds);
+						  restartPolicy.attempts,
+						  restartPolicy.maxT);
 				return false;
 			}
 
-			(void) follow_restart_backoff(&restartPolicy, &sleepTimeMs);
+			int sleepTimeMs =
+				pgsql_compute_connection_retry_sleep_time(&restartPolicy);
 
 			log_warn("Restarting follow sub-processes after %d ms "
 					 "(restart %d of at most %d in %d seconds)",
 					 sleepTimeMs,
-					 restarts,
-					 restartPolicy.maxRestarts,
-					 restartPolicy.windowSeconds);
+					 restartPolicy.attempts,
+					 restartPolicy.maxR,
+					 restartPolicy.maxT);
+
+			/* sleep in short steps so that we notice signals */
+			for (int slept = 0;
+				 slept < sleepTimeMs &&
+				 !asked_to_quit && !asked_to_stop && !asked_to_stop_fast;
+				 slept += 100)
+			{
+				pg_usleep(100 * 1000);
+			}
 
 			continue;
 		}

@@ -331,6 +331,34 @@ pgsql_compute_connection_retry_sleep_time(ConnectionRetryPolicy *retryPolicy)
 
 
 /*
+ * pgsql_retry_policy_renew starts a new time budget (and a new attempts
+ * budget) when the current one has been spent entirely: it allows a
+ * long-running caller to retry again, maxR times within maxT, each time a
+ * failure comes after the previous window has elapsed.
+ */
+void
+pgsql_retry_policy_renew(ConnectionRetryPolicy *retryPolicy)
+{
+	instr_time duration;
+
+	if (INSTR_TIME_IS_ZERO(retryPolicy->startTime))
+	{
+		return;
+	}
+
+	INSTR_TIME_SET_CURRENT(duration);
+	INSTR_TIME_SUBTRACT(duration, retryPolicy->startTime);
+
+	if (INSTR_TIME_GET_MILLISEC(duration) >= (retryPolicy->maxT * 1000))
+	{
+		INSTR_TIME_SET_ZERO(retryPolicy->startTime);
+		retryPolicy->attempts = 0;
+		retryPolicy->sleepTime = retryPolicy->baseSleepTime;
+	}
+}
+
+
+/*
  * pgsql_retry_policy_expired returns true when we should stop retrying, either
  * per the policy (maxR / maxT) or because we received a signal that we have to
  * obey.
