@@ -43,11 +43,11 @@
  *    keyword text maps to a different (nested-shaped) token -- see
  *    archive_toc_tag_token.
  *
- * 2. Everything after a tag keyword is tokenized uniformly by TOCBODY
- *    (or its quote-aware twin TOCQBODY, see below) into WORD, SPACE,
- *    the handful of separator keywords, and structural punctuation.
- *    archive_toc_grammar.y's own productions -- not any string-splitting
- *    here or in archive_toc_parser.c -- decide how many WORDs (and
+ * 2. Everything after a tag keyword is tokenized uniformly by TOCBODY/
+ *    TOCSBODY (or their quote-aware twins TOCQBODY/TOCQSBODY, see below)
+ *    into WORD, SPACE, the handful of separator keywords, and structural
+ *    punctuation. archive_toc_grammar.y's own productions -- not any
+ *    string-splitting here or in archive_toc_parser.c -- decide how many WORDs (and
  *    SPACEs between them) make up one field, and recognize a nested
  *    parenthesized group (a type's own typmod) by ordinary grammar
  *    recursion, not a hand-counted depth variable. A multi-word field's
@@ -90,6 +90,24 @@
  * the top level, so treating its own '"' as the start of a quoted
  * identifier (TOCBODY wrongly behaving like TOCQBODY) silently dropped
  * the whole entry.
+ *
+ * TOCBODY/TOCQBODY each have a further own twin, TOCSBODY/TOCQSBODY
+ * (plus NAMESPACE's own twin NAMESPACES, reached first for a top-level
+ * entry so it can BEGIN() the right one of the two once nspname is
+ * done): the handful of shapes that have one of pg_dump's own fixed
+ * keyword separators in their remainder (CAST, TRANSFORM, USER MAPPING,
+ * DEFAULT ACL, an OPERATOR CLASS/FAMILY ACL/COMMENT, a relation-owned
+ * ACL/COMMENT) reach TOCSBODY/TOCQSBODY, where AS/FOR/LANGUAGE/SERVER/
+ * USING/ON/CAST/USER MAPPING/DEFAULT PRIVILEGES are active rules; every
+ * other shape reaches plain TOCBODY/TOCQBODY, where none of those nine
+ * patterns exist at all. See the TOCSBODY/TOCQSBODY comment, just above
+ * this file's first %%, and archive_toc_tag_token, which is the one
+ * place that already knows an entry's whole shape and so is the one
+ * place that picks which of the two to BEGIN() into -- this is the
+ * same backwards-is-a-silent-bug hazard as TOCBODY/TOCQBODY's own
+ * split above, one level further in: a table literally named `... AS
+ * (SELECT ...` (see tests/unit/setup/6-multiline-table-name.sql) has
+ * no AS keyword of its own at all, so it must never reach TOCSBODY.
  *
  * Every token that carries a value (an OID's number, a tag keyword's
  * ArchiveItemDesc, a WORD's text) sets it in archive_toc_lval -- bison's
@@ -136,31 +154,6 @@ static bool archive_toc_expect_domain = false;
 static bool archive_toc_expect_transform_kw = false;
 
 /*
- * archive_toc_structured_shape gates the nine fixed-separator keyword
- * patterns below (AS, FOR, LANGUAGE, SERVER, USING, ON, CAST, USER
- * MAPPING's own repeated tag word, DEFAULT ACL's own repeated tag word):
- * each is pg_dump's own fixed, hard-coded separator for exactly one
- * further-structured shape (CAST, TRANSFORM, USER MAPPING, DEFAULT ACL,
- * an OPERATOR CLASS/FAMILY ACL/COMMENT, a relation-owned ACL/COMMENT),
- * never for any other tag's own name/relname/wordname field -- those
- * are raw, unescaped, caller-controlled text with no keyword convention
- * of their own (see TOCBODY's own file-header comment), so a table
- * literally named `... AS (SELECT ...` (a real, already-hit regression,
- * not a hypothetical: see tests/unit/setup/6-multiline-table-name.sql)
- * must scan its " AS " run as plain WORD/SPACE text, not the AS token.
- *
- * Unlike archive_toc_expect_domain/_transform_kw (single-token lookahead,
- * consumed on the very next match), this one stays set for the entire
- * rest of the current entry: archive_toc_tag_token sets it exactly once,
- * at the one point that already knows this entry's whole shape, and
- * every TOP_ or NESTED_ production that actually uses one of these nine
- * keywords only does so somewhere inside that same entry's own body, an
- * arbitrary number of WORDs later (CAST's own castSourceType, TRANSFORM's
- * own typename, ...) -- too far ahead for a single-token flag to reach.
- */
-static bool archive_toc_structured_shape = false;
-
-/*
  * archive_toc_token_end is the end of whichever token archive_toc_lex()
  * just matched, as a raw pointer into flex's own stable internal scan
  * buffer (the one yy_scan_string allocates and keeps for as long as the
@@ -189,10 +182,51 @@ const char *archive_toc_token_end;
 %option nounput
 %option noinput
 %option never-interactive
+%option stack
 
+/*
+ * TOCBODY/TOCQBODY and their own "S" twins, TOCSBODY/TOCQSBODY, are this
+ * format's one further split carried all the way into the start-condition
+ * set itself, not just into TOCBODY/TOCQBODY's own quoting split (see the
+ * file header): TOCSBODY/TOCQSBODY are reached ONLY for the handful of
+ * shapes that actually have one of pg_dump's own fixed keyword separators
+ * in their remainder (CAST, TRANSFORM, USER MAPPING, DEFAULT ACL, an
+ * OPERATOR CLASS/FAMILY ACL/COMMENT, a relation-owned ACL/COMMENT) -- see
+ * archive_toc_tag_token, the one place that already knows this entry's
+ * whole shape and picks which of the four to BEGIN(). Every other shape
+ * (TOP_SIMPLE/TOP_RELATION/TOP_FUNCLIKE/TOP_OPERATOR/NESTED_EXTENSION/
+ * NESTED_GENERIC/NESTED_RELATION_LIKE/NESTED_COLUMN/NESTED_FUNCLIKE/
+ * NESTED_OPERATOR) reaches plain TOCBODY/TOCQBODY, where AS/FOR/LANGUAGE/
+ * SERVER/USING/ON/CAST/USER MAPPING/DEFAULT PRIVILEGES simply have no
+ * rule at all -- not a rule that matches and then backs off, a table
+ * literally named `... AS (SELECT ...` (a real, already-hit regression,
+ * not a hypothetical: see tests/unit/setup/6-multiline-table-name.sql)
+ * never has a chance to be seen as anything but plain WORD/SPACE text,
+ * because the AS pattern isn't active in the state that scans it.
+ *
+ * NAMESPACE's own twin, NAMESPACES, exists for the same reason one level
+ * up: a top-level CAST/TRANSFORM/USER MAPPING/DEFAULT ACL entry's own
+ * nspname still has to be scanned (same two rules as NAMESPACE) before
+ * its body does, so NAMESPACES is reached instead of NAMESPACE precisely
+ * so IT can BEGIN(TOCSBODY) rather than BEGIN(TOCBODY) once nspname is
+ * done -- see archive_toc_tag_token's top-level switch. ACL/COMMENT
+ * themselves always use plain NAMESPACE: their own nested object type
+ * (archive_toc_begin_nested_tag, below) re-enters INITIAL before any
+ * TOCBODY/TOCQBODY token is ever scanned, so which of TOCBODY/TOCSBODY
+ * NAMESPACE's own rules would have landed in is moot for them.
+ *
+ * %option stack (above) backs TOCQIDENT's own quote: TOCQBODY and
+ * TOCQSBODY both push it with yy_push_state on '"' and it pops back with
+ * yy_pop_state on the closing '"', so a quoted identifier returns to
+ * whichever of the two sent it there, with no flag or extra state of its
+ * own needed to remember which.
+ */
 %x NAMESPACE
+%x NAMESPACES
 %x TOCBODY
+%x TOCSBODY
 %x TOCQBODY
+%x TOCQSBODY
 %x TOCQIDENT
 
 %%
@@ -303,123 +337,34 @@ const char *archive_toc_token_end;
 
 }
 
-<TOCBODY>{
+<NAMESPACES>{
 
+  /*
+   * NAMESPACES's own twin of NAMESPACE's two rules above -- identical
+   * except for landing in TOCSBODY rather than TOCBODY, see this file's
+   * TOCSBODY/TOCQSBODY comment above the first %%.
+   */
+"-"" "                             { BEGIN(TOCSBODY); return NO_NSPNAME; }
+[^ \n]+" "                         { BEGIN(TOCSBODY);
+                                     yytext[yyleng - 1] = '\0';
+                                     archive_toc_lval.word.text = strdup(yytext);
+                                     archive_toc_lval.word.quoted = false;
+                                     archive_toc_lval.word.end = archive_toc_token_end;
+                                     return WORD; }
+
+}
+
+<TOCBODY,TOCSBODY>{
+
+  /*
+   * Shared by TOCBODY and TOCSBODY: these eight rules (SPACE/NO_OWNER/
+   * punctuation/WORD/LASTWORD) apply identically to every TOCBODY-
+   * reached shape whether or not it has a further-structured keyword
+   * vocabulary of its own -- see this file's TOCSBODY/TOCQSBODY comment
+   * above the first %%. Only TOCSBODY additionally has the keyword
+   * rules below; this block is unchanged from before that split.
+   */
 " "+$                              { return NO_OWNER; }
-
-  /*
-   * Each of these six keywords is this format's own fixed separator for
-   * exactly one further-structured shape (CAST's " AS ", TRANSFORM's own
-   * "FOR ... LANGUAGE ...", USER MAPPING's " SERVER ", DEFAULT ACL's
-   * "FOR ...", an OPERATOR CLASS/FAMILY ACL/COMMENT's " USING ", a
-   * relation-owned ACL/COMMENT object's " ON " -- see pg_dump.c's own
-   * dumpCast/dumpTransform/dumpUserMappings/dumpDefaultACL/dumpOpclass/
-   * dumpOpfamily), always with exactly the single space pg_dump's own
-   * fixed sprintf()-style formatting puts on each side. Matching ALL of
-   * that (keyword and both surrounding runs of whitespace) as one token
-   * means the grammar itself never has to spell out an explicit SPACE
-   * around any of them (see archive_toc_grammar.y's own file header) --
-   * "one or more spaces" on each side rather than hard-coding exactly
-   * one still correctly handles a hand-edited file with irregular
-   * spacing, at the cost of no longer being able to tell such a file
-   * apart from a normal one. Flex's own longest-match rule means these
-   * six patterns always win over the generic WORD rule below wherever
-   * they apply, so archive_toc_word_or_keyword_token's own classifier
-   * no longer needs (or has) entries for any of them. CAST_KW below is
-   * the same idea with only a trailing space to bake in (see its own
-   * comment); DOMAIN and TRANSFORM_KW are the two keywords left that
-   * genuinely need post-match recognition instead, since neither has a
-   * whitespace convention of its own to bake into a dedicated pattern.
-   *
-   * Flex's longest-match rule means these would ALSO win over the
-   * plain SPACE/WORD rules below for any OTHER tag's own name/relname/
-   * wordname field that merely happens to contain one of these six
-   * words padded by spaces -- a real, already-hit regression (see
-   * archive_toc_structured_shape's own comment, above the first %%),
-   * not a hypothetical, since those fields are raw, caller-controlled
-   * text with no keyword convention of their own. Each action below
-   * REJECTs when archive_toc_structured_shape is false, which hands
-   * flex's own matching back to the next-longest alternative for this
-   * same starting position -- here, the plain " "+ SPACE rule, leaving
-   * the keyword text itself (e.g. "AS") to the generic WORD rule right
-   * after it, exactly as if this pattern had never matched at all.
-   */
-" "+"AS"" "+                       { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     return AS; }
-  /*
-   * FOR's own leading space is "zero or more", not "one or more" like
-   * the rest of this block: NESTED_TRANSFORM reaches it with no
-   * separator left to consume (its own tag keyword's pattern,
-   * <INITIAL> above, already baked in the one space that used to sit
-   * here -- unlike TOP_TRANSFORM's/TOP_DEFAULT_ACL's repeated-word
-   * tokens ahead of it, which still leave FOR's own leading space
-   * alone, see CAST_KW/TRANSFORM_KW/DEFAULT_ACL_KW's own comments).
-   */
-" "*"FOR"" "+                      { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     archive_toc_lval.pos = yytext + strspn(yytext, " ");
-                                     return FOR; }
-" "+"LANGUAGE"" "+                 { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     return LANGUAGE_KW; }
-" "+"SERVER"" "+                   { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     return SERVER_KW; }
-" "+"USING"" "+                    { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     return USING; }
-" "+"ON"" "+                       { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     archive_toc_expect_domain = true;
-                                     return ON; }
-
-  /*
-   * CAST's and USER MAPPING's own repeated tag words (dumpCast's and
-   * dumpUserMappings' labelq always write "CAST (sourcetype AS
-   * targettype)" / "USER MAPPING username SERVER servername" for the
-   * remainder, pg_dump.c) -- unlike the six above, nothing ever
-   * precedes either with a run of whitespace of its own (nspname's own
-   * WORD/NO_NSPNAME pattern already consumes the single separator
-   * space ahead of it, see <NAMESPACE> above), so only the trailing
-   * space needs baking in. DEFAULT ACL's own repeated "DEFAULT
-   * PRIVILEGES" (dumpDefaultACL, pg_dump.c) needs neither: FOR's own
-   * pattern already bakes the separator space ahead of it, same as
-   * TRANSFORM_KW below -- but its one internal space, between the two
-   * words, is still part of this single fixed literal, not something
-   * a later token could ever consume on its own.
-   *
-   * Same archive_toc_structured_shape REJECT guard as the six above --
-   * a table literally named `CAST (something)` must still scan as a
-   * plain WORD when it is TOP_SIMPLE's own name, not CAST_KW.
-   */
-"CAST"" "+                         { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     return CAST_KW; }
-"USER"" "+"MAPPING"" "+            { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     return USER_MAPPING_KW; }
-"DEFAULT"" "+"PRIVILEGES"          { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     return DEFAULT_ACL_KW; }
 
 " "+                               { archive_toc_lval.pos = archive_toc_token_end;
                                      return SPACE; }
@@ -438,28 +383,87 @@ const char *archive_toc_token_end;
 
 }
 
-<TOCQBODY>{
-
-" "+$                              { return NO_OWNER; }
+<TOCSBODY>{
 
   /*
-   * NESTED_ON_RELATION's own " ON " separator -- see TOCBODY's own rule
-   * and archive_toc_structured_shape's own comment, above the first %%.
-   * TOCQBODY is also reached by NESTED_RELATION_LIKE/COLUMN/FUNCLIKE/
-   * OPERATOR, none of which ever expect ON, so the same REJECT guard
-   * applies here too (e.g. a quoted column name containing " ON ").
+   * TOCSBODY-only: this format's own fixed keyword separators, one per
+   * further-structured shape (CAST's " AS ", TRANSFORM's own "FOR ...
+   * LANGUAGE ...", USER MAPPING's " SERVER ", DEFAULT ACL's "FOR ..."
+   * -- see pg_dump.c's own dumpCast/dumpTransform/dumpUserMappings/
+   * dumpDefaultACL), always with exactly the single space pg_dump's own
+   * fixed sprintf()-style formatting puts on each side. Matching ALL of
+   * that (keyword and both surrounding runs of whitespace) as one token
+   * means the grammar itself never has to spell out an explicit SPACE
+   * around any of them (see archive_toc_grammar.y's own file header) --
+   * "one or more spaces" on each side rather than hard-coding exactly
+   * one still correctly handles a hand-edited file with irregular
+   * spacing, at the cost of no longer being able to tell such a file
+   * apart from a normal one. CAST_KW below is the same idea with only a
+   * trailing space to bake in (see its own comment); DOMAIN and
+   * TRANSFORM_KW are the two keywords left that genuinely need post-
+   * match recognition instead, since neither has a whitespace
+   * convention of its own to bake into a dedicated pattern.
+   *
+   * Unlike the flag this block used to be gated by, these patterns are
+   * simply absent from TOCBODY: a table literally named `... AS
+   * (SELECT ...` (see tests/unit/setup/6-multiline-table-name.sql)
+   * reaches plain TOCBODY, where there is no AS rule at all for its own
+   * " AS " run to match -- the plain SPACE/WORD rules above are the
+   * only ones active there, no REJECT fallback needed.
    */
-" "+"ON"" "+                       { if (!archive_toc_structured_shape)
-                                     {
-                                         REJECT;
-                                     }
-                                     archive_toc_expect_domain = true;
-                                     return ON; }
+" "+"AS"" "+                       { return AS; }
+  /*
+   * FOR's own leading space is "zero or more", not "one or more" like
+   * the rest of this block: NESTED_TRANSFORM reaches it with no
+   * separator left to consume (its own tag keyword's pattern,
+   * <INITIAL> above, already baked in the one space that used to sit
+   * here -- unlike TOP_TRANSFORM's/TOP_DEFAULT_ACL's repeated-word
+   * tokens ahead of it, which still leave FOR's own leading space
+   * alone, see CAST_KW/TRANSFORM_KW/DEFAULT_ACL_KW's own comments).
+   */
+" "*"FOR"" "+                      { archive_toc_lval.pos = yytext + strspn(yytext, " ");
+                                     return FOR; }
+" "+"LANGUAGE"" "+                 { return LANGUAGE_KW; }
+" "+"SERVER"" "+                   { return SERVER_KW; }
+" "+"USING"" "+                    { return USING; }
+
+  /*
+   * CAST's and USER MAPPING's own repeated tag words (dumpCast's and
+   * dumpUserMappings' labelq always write "CAST (sourcetype AS
+   * targettype)" / "USER MAPPING username SERVER servername" for the
+   * remainder, pg_dump.c) -- unlike the four above, nothing ever
+   * precedes either with a run of whitespace of its own (nspname's own
+   * WORD/NO_NSPNAME pattern already consumes the single separator
+   * space ahead of it, see <NAMESPACE>/<NAMESPACES> above), so only the
+   * trailing space needs baking in. DEFAULT ACL's own repeated "DEFAULT
+   * PRIVILEGES" (dumpDefaultACL, pg_dump.c) needs neither: FOR's own
+   * pattern already bakes the separator space ahead of it, same as
+   * TRANSFORM_KW below -- but its one internal space, between the two
+   * words, is still part of this single fixed literal, not something
+   * a later token could ever consume on its own.
+   */
+"CAST"" "+                         { return CAST_KW; }
+"USER"" "+"MAPPING"" "+            { return USER_MAPPING_KW; }
+"DEFAULT"" "+"PRIVILEGES"          { return DEFAULT_ACL_KW; }
+
+}
+
+<TOCQBODY,TOCQSBODY>{
+
+  /*
+   * Shared by TOCQBODY and TOCQSBODY, mirroring TOCBODY/TOCSBODY's own
+   * split above -- including the quote rule, which pushes onto flex's
+   * own state stack (%option stack) rather than a fixed BEGIN(), so
+   * TOCQIDENT's closing quote can pop back to whichever of the two sent
+   * it there (see this file's TOCSBODY/TOCQSBODY comment, above the
+   * first %%).
+   */
+" "+$                              { return NO_OWNER; }
 
 " "+                               { archive_toc_lval.pos = archive_toc_token_end;
                                      return SPACE; }
 
-\"                                 { BEGIN(TOCQIDENT);
+\"                                 { yy_push_state(TOCQIDENT);
                                      archive_toc_word[0] = '\0'; }
 
 "("                                { archive_toc_lval.pos = archive_toc_token_end;
@@ -476,10 +480,25 @@ const char *archive_toc_token_end;
 
 }
 
+<TOCQSBODY>{
+
+  /*
+   * TOCQSBODY-only: NESTED_ON_RELATION's own " ON " separator, the one
+   * structured keyword any quote-aware shape uses. Unlike the flag this
+   * used to be gated by, TOCQBODY (NESTED_RELATION_LIKE/COLUMN/FUNCLIKE/
+   * OPERATOR, none of which ever expect ON) simply has no ON rule at
+   * all, so e.g. a quoted column name containing " ON " is never even
+   * offered the chance to match it.
+   */
+" "+"ON"" "+                       { archive_toc_expect_domain = true;
+                                     return ON; }
+
+}
+
 <TOCQIDENT>{
 
 \"\"                               { archive_toc_ident_append("\"", 1); }
-\"                                 { BEGIN(TOCQBODY);
+\"                                 { yy_pop_state();
                                      archive_toc_lval.word.text = strdup(archive_toc_word);
                                      archive_toc_lval.word.quoted = true;
                                      archive_toc_lval.word.end = archive_toc_token_end;
@@ -534,25 +553,29 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 
 	if (!archive_toc_nested_mode)
 	{
-		BEGIN(NAMESPACE);
-
 		/*
-		 * Reset here, unconditionally, before either switch below can set
-		 * it true: every case that doesn't explicitly opt in (TOP_SIMPLE's
-		 * own default included) must come out of this function with it
-		 * false, since that default case is reached by far the most tags.
+		 * Each case below picks its own BEGIN() target, NAMESPACE or
+		 * NAMESPACES, instead of one unconditional BEGIN(NAMESPACE) up
+		 * front: NAMESPACE's own two rules land in TOCBODY once nspname
+		 * is done, NAMESPACES's twin lands in TOCSBODY -- see this
+		 * file's TOCSBODY/TOCQSBODY comment, above the first %%. ACL/
+		 * COMMENT always use plain NAMESPACE: their own nested object
+		 * type (archive_toc_begin_nested_tag, below) re-enters INITIAL
+		 * before any TOCBODY/TOCSBODY token is ever scanned, so which of
+		 * the two NAMESPACE's own rules would have reached is moot for
+		 * them.
 		 */
-		archive_toc_structured_shape = false;
-
 		switch (desc)
 		{
 			case ARCHIVE_TAG_ACL:
 			{
+				BEGIN(NAMESPACE);
 				return ACL;
 			}
 
 			case ARCHIVE_TAG_COMMENT:
 			{
+				BEGIN(NAMESPACE);
 				return COMMENT;
 			}
 
@@ -560,36 +583,38 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_PROCEDURE:
 			case ARCHIVE_TAG_AGGREGATE:
 			{
+				BEGIN(NAMESPACE);
 				return TOP_FUNCLIKE;
 			}
 
 			case ARCHIVE_TAG_OPERATOR:
 			{
+				BEGIN(NAMESPACE);
 				return TOP_OPERATOR;
 			}
 
 			case ARCHIVE_TAG_CAST:
 			{
-				archive_toc_structured_shape = true;
+				BEGIN(NAMESPACES);
 				return TOP_CAST;
 			}
 
 			case ARCHIVE_TAG_TRANSFORM:
 			{
-				archive_toc_structured_shape = true;
+				BEGIN(NAMESPACES);
 				archive_toc_expect_transform_kw = true;
 				return TOP_TRANSFORM;
 			}
 
 			case ARCHIVE_TAG_USER_MAPPING:
 			{
-				archive_toc_structured_shape = true;
+				BEGIN(NAMESPACES);
 				return TOP_USER_MAPPING;
 			}
 
 			case ARCHIVE_TAG_DEFAULT_ACL:
 			{
-				archive_toc_structured_shape = true;
+				BEGIN(NAMESPACES);
 				return TOP_DEFAULT_ACL;
 			}
 
@@ -606,6 +631,7 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_TABLE_ATTACH:
 			case ARCHIVE_TAG_TRIGGER:
 			{
+				BEGIN(NAMESPACE);
 				return TOP_RELATION;
 			}
 
@@ -625,6 +651,7 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			 */
 			default:
 			{
+				BEGIN(NAMESPACE);
 				return TOP_SIMPLE;
 			}
 		}
@@ -642,6 +669,9 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 		 * (forgetting to update one of two case lists when adding a tag
 		 * is a real, already-hit failure mode, see TOCBODY/TOCQBODY's
 		 * own file-header comment on the bug that first exposed it).
+		 * Which of TOCBODY/TOCSBODY or TOCQBODY/TOCQSBODY each case
+		 * BEGIN()s into is that same per-tag decision too -- see this
+		 * file's TOCSBODY/TOCQSBODY comment, above the first %%.
 		 *
 		 * Only these own an identifier pg_dump itself built with
 		 * fmtId() and so can be double-quoted (archive_toc_object_has_
@@ -652,8 +682,6 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 		 * another character, not a quote to unescape. TOCQBODY is
 		 * TOCBODY's quote-aware twin, see the file header.
 		 */
-		archive_toc_structured_shape = false;
-
 		switch (desc)
 		{
 			case ARCHIVE_TAG_TABLE:
@@ -684,8 +712,7 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_POLICY:
 			case ARCHIVE_TAG_RULE:
 			{
-				BEGIN(TOCQBODY);
-				archive_toc_structured_shape = true;
+				BEGIN(TOCQSBODY);
 				return NESTED_ON_RELATION;
 			}
 
@@ -705,15 +732,13 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 
 			case ARCHIVE_TAG_CAST:
 			{
-				BEGIN(TOCBODY);
-				archive_toc_structured_shape = true;
+				BEGIN(TOCSBODY);
 				return NESTED_CAST;
 			}
 
 			case ARCHIVE_TAG_TRANSFORM:
 			{
-				BEGIN(TOCBODY);
-				archive_toc_structured_shape = true;
+				BEGIN(TOCSBODY);
 				archive_toc_expect_transform_kw = true;
 				return NESTED_TRANSFORM;
 			}
@@ -721,8 +746,7 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_OPERATOR_CLASS:
 			case ARCHIVE_TAG_OPERATOR_FAMILY:
 			{
-				BEGIN(TOCBODY);
-				archive_toc_structured_shape = true;
+				BEGIN(TOCSBODY);
 				return NESTED_OPCLASS_FAMILY;
 			}
 
