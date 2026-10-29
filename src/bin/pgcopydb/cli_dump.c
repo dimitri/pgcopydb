@@ -45,7 +45,7 @@ static CommandLine dump_schema_command =
 static CommandLine dump_roles_command =
 	make_command(
 		"roles",
-		"Dump source database roles as custome file in work directory",
+		"Dump source database roles as custom file in work directory",
 		" --source <URI>",
 		"  --source            Postgres URI to the source database\n"
 		"  --target            Directory where to save the dump files\n"

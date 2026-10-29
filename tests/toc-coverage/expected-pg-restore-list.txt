@@ -1,0 +1,111 @@
+;
+; Archive created at 2026-10-27 23:37:08 UTC
+;     dbname: postgres
+;     TOC Entries: 101
+;     Compression: gzip
+;     Dump Version: 1.16-0
+;     Format: CUSTOM
+;     Integer: 4 bytes
+;     Offset: 8 bytes
+;     Dumped from database version: 18.6 (Debian 18.6-1.pgdg13+2)
+;     Dumped by pg_dump version: 18.6 (Debian 18.6-1.pgdg13+2)
+;
+;
+; Selected TOC Entries:
+;
+9; 2615 16401 SCHEMA - toc_fixture postgres
+3579; 0 0 COMMENT - SCHEMA toc_fixture postgres
+3580; 0 0 ACL - SCHEMA toc_fixture postgres
+2210; 3456 16472 COLLATION toc_fixture fixture_collation postgres
+3581; 0 0 COMMENT toc_fixture COLLATION fixture_collation postgres
+4; 3079 16579 EXTENSION - fixture_transform 
+3582; 0 0 COMMENT - EXTENSION fixture_transform 
+3392; 3576 16582 TRANSFORM - TRANSFORM FOR integer LANGUAGE plpgsql 
+3583; 0 0 COMMENT - TRANSFORM FOR integer LANGUAGE plpgsql 
+3; 3079 16490 EXTENSION - pg_trgm 
+3584; 0 0 COMMENT - EXTENSION pg_trgm 
+2; 3079 16477 EXTENSION - postgres_fdw 
+3585; 0 0 COMMENT - EXTENSION postgres_fdw 
+929; 1247 16450 DOMAIN toc_fixture positive_int postgres
+3586; 0 0 COMMENT toc_fixture DOMAIN positive_int postgres
+237; 1255 16470 FUNCTION toc_fixture positive_int_to_int(toc_fixture.positive_int) postgres
+3391; 2605 16471 CAST - CAST (toc_fixture.positive_int AS integer) 
+3587; 0 0 COMMENT - CAST (toc_fixture.positive_int AS integer) 
+234; 1255 16457 FUNCTION toc_fixture Fixture Weird Fn(integer) postgres
+3588; 0 0 COMMENT toc_fixture FUNCTION "Fixture Weird Fn"(a integer) postgres
+277; 1255 16452 FUNCTION toc_fixture fixture_add(integer, integer) postgres
+3589; 0 0 COMMENT toc_fixture FUNCTION fixture_add(a integer, b integer) postgres
+235; 1255 16458 FUNCTION toc_fixture fixture_eq_fn(integer, integer) postgres
+274; 1255 16571 FUNCTION toc_fixture fixture_evt_fn() postgres
+236; 1255 16460 FUNCTION toc_fixture fixture_neg_fn(integer) postgres
+232; 1255 16453 PROCEDURE toc_fixture fixture_proc(integer) postgres
+3590; 0 0 COMMENT toc_fixture PROCEDURE fixture_proc(IN a integer) postgres
+233; 1255 16456 FUNCTION toc_fixture fixture_scale(integer[], integer) postgres
+3591; 0 0 COMMENT toc_fixture FUNCTION fixture_scale(b integer[], a integer) postgres
+231; 1255 16430 FUNCTION toc_fixture parent_trg_fn() postgres
+932; 1255 16454 AGGREGATE toc_fixture fixture_concat(text) postgres
+3592; 0 0 COMMENT toc_fixture AGGREGATE fixture_concat(text) postgres
+933; 1255 16455 AGGREGATE toc_fixture fixture_count_fn(*) postgres
+3593; 0 0 COMMENT toc_fixture AGGREGATE fixture_count_fn(*) postgres
+1733; 2617 16459 OPERATOR toc_fixture === postgres
+3594; 0 0 COMMENT toc_fixture OPERATOR === (integer, integer) postgres
+1734; 2617 16461 OPERATOR toc_fixture @-@ postgres
+3595; 0 0 COMMENT toc_fixture OPERATOR @-@ (NONE, integer) postgres
+2078; 2753 16462 OPERATOR FAMILY toc_fixture fixture_int_ops postgres
+3596; 0 0 COMMENT toc_fixture OPERATOR FAMILY fixture_int_ops USING btree postgres
+1929; 2616 16463 OPERATOR CLASS toc_fixture fixture_int_ops_class postgres
+3597; 0 0 COMMENT toc_fixture OPERATOR CLASS fixture_int_ops_class USING btree postgres
+3161; 2607 16473 CONVERSION toc_fixture fixture_conv postgres
+3598; 0 0 COMMENT toc_fixture CONVERSION fixture_conv postgres
+2117; 3600 16475 TEXT SEARCH DICTIONARY toc_fixture fixture_tsdict postgres
+3599; 0 0 COMMENT toc_fixture TEXT SEARCH DICTIONARY fixture_tsdict postgres
+2148; 3602 16476 TEXT SEARCH CONFIGURATION toc_fixture fixture_tsconfig postgres
+3600; 0 0 COMMENT toc_fixture TEXT SEARCH CONFIGURATION fixture_tsconfig postgres
+2150; 1417 16485 SERVER - fixture_server postgres
+3601; 0 0 COMMENT - SERVER fixture_server postgres
+3602; 0 0 USER MAPPING - USER MAPPING postgres SERVER fixture_server postgres
+227; 1259 16417 TABLE toc_fixture child postgres
+226; 1259 16416 SEQUENCE toc_fixture child_id_seq postgres
+3603; 0 0 SEQUENCE OWNED BY toc_fixture child_id_seq postgres
+230; 1259 16487 FOREIGN TABLE toc_fixture fixture_foreign_table postgres
+3604; 0 0 COMMENT toc_fixture FOREIGN TABLE fixture_foreign_table postgres
+224; 1259 16403 TABLE toc_fixture parent postgres
+3605; 0 0 COMMENT toc_fixture TABLE parent postgres
+3606; 0 0 COMMENT toc_fixture COLUMN parent.name postgres
+3607; 0 0 ACL toc_fixture COLUMN parent.name postgres
+223; 1259 16402 SEQUENCE toc_fixture parent_id_seq postgres
+3608; 0 0 SEQUENCE OWNED BY toc_fixture parent_id_seq postgres
+229; 1259 16438 MATERIALIZED VIEW toc_fixture parent_matview postgres
+3609; 0 0 COMMENT toc_fixture MATERIALIZED VIEW parent_matview postgres
+228; 1259 16434 VIEW toc_fixture parent_view postgres
+3610; 0 0 COMMENT toc_fixture VIEW parent_view postgres
+225; 1259 16415 SEQUENCE toc_fixture standalone_seq postgres
+3611; 0 0 COMMENT toc_fixture SEQUENCE standalone_seq postgres
+3612; 0 0 ACL toc_fixture SEQUENCE standalone_seq postgres
+3396; 2604 16420 DEFAULT toc_fixture child id postgres
+3394; 2604 16406 DEFAULT toc_fixture parent id postgres
+3402; 2606 16423 CONSTRAINT toc_fixture child child_pkey postgres
+3399; 2606 16414 CONSTRAINT toc_fixture parent parent_pkey postgres
+3400; 1259 16429 INDEX toc_fixture child_parent_id_idx postgres
+3403; 3381 16474 STATISTICS toc_fixture fixture_stats postgres
+3616; 0 0 COMMENT toc_fixture STATISTICS fixture_stats postgres
+3553; 2618 16432 RULE toc_fixture child child_rule postgres
+3617; 0 0 COMMENT toc_fixture RULE child_rule ON child postgres
+3405; 2620 16431 TRIGGER toc_fixture parent parent_trg postgres
+3618; 0 0 COMMENT toc_fixture TRIGGER parent_trg ON parent postgres
+3404; 2606 16424 FK CONSTRAINT toc_fixture child child_parent_id_fkey postgres
+3556; 0 16417 ROW SECURITY toc_fixture child postgres
+3557; 3256 16433 POLICY toc_fixture child child_pol postgres
+3619; 0 0 COMMENT toc_fixture POLICY child_pol ON child postgres
+3558; 6104 16573 PUBLICATION - fixture_pub postgres
+3620; 0 0 COMMENT - PUBLICATION fixture_pub postgres
+3559; 6104 16576 PUBLICATION - fixture_pub_schema postgres
+3561; 6106 16575 PUBLICATION TABLE toc_fixture fixture_pub child postgres
+3560; 6106 16574 PUBLICATION TABLE toc_fixture fixture_pub parent postgres
+3562; 6237 16577 PUBLICATION TABLES IN SCHEMA toc_fixture fixture_pub_schema toc_fixture postgres
+3563; 6100 16578 SUBSCRIPTION - fixture_sub postgres
+3621; 0 0 COMMENT - SUBSCRIPTION fixture_sub postgres
+2151; 826 16584 DEFAULT ACL toc_fixture DEFAULT PRIVILEGES FOR TABLES postgres
+3393; 3466 16572 EVENT TRIGGER - fixture_evt postgres
+3622; 0 0 COMMENT - EVENT TRIGGER fixture_evt postgres
+3569; 0 16438 MATERIALIZED VIEW DATA toc_fixture parent_matview postgres

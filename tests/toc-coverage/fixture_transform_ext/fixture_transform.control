@@ -1,0 +1,3 @@
+comment = 'fixture extension providing a real CREATE TRANSFORM for toc-coverage testing'
+default_version = '1.0'
+relocatable = true

@@ -5,6 +5,7 @@
  */
 
 #include <errno.h>
+#include <fnmatch.h>
 #include <getopt.h>
 #include <inttypes.h>
 
@@ -15,6 +16,7 @@
 #include "copydb.h"
 #include "commandline.h"
 #include "env_utils.h"
+#include "file_utils.h"
 #include "filtering.h"
 #include "log.h"
 #include "parsing_utils.h"
@@ -39,6 +41,7 @@ static void cli_list_indexes(int argc, char **argv);
 static void cli_list_depends(int argc, char **argv);
 static void cli_list_schema(int argc, char **argv);
 static void cli_list_progress(int argc, char **argv);
+static void cli_list_toc(int argc, char **argv);
 
 static bool copydb_init_specs_from_listdboptions(CopyDataSpec *copySpecs,
 												 ListDBOptions *listDBoptions,
@@ -56,6 +59,7 @@ static bool cli_list_table_part_print_hook(void *ctx, SourceTableParts *part);
 static bool cli_list_seq_print_hook(void *context, SourceSequence *seq);
 static bool cli_list_index_print_hook(void *context, SourceIndex *index);
 static bool cli_list_depends_hook(void *ctx, SourceDepend *dep);
+static bool cli_list_toc_hook(void *ctx, ArchiveContentItem *item);
 
 
 static CommandLine list_catalogs_command =
@@ -180,6 +184,23 @@ static CommandLine list_progress_command =
 		cli_list_db_getopts,
 		cli_list_progress);
 
+static CommandLine list_toc_command =
+	make_command(
+		"toc",
+		"List and filter a pg_dump archive's Table of Contents",
+		" [ --dump ... | --restore-list ... ] ",
+		"  --dump <filename>         Custom-format pg_dump archive to inspect\n"
+		"  --restore-list <filename> A pg_restore --list output already saved to a file\n"
+		"  --source                  Postgres URI to the source database (required with --filter)\n"
+		"  --filter <filename>       Apply the pgcopydb filters defined in <filename>\n"
+		"  --schema-name             Only list entries in this schema\n"
+		"  --name <pattern>          Only list entries whose name matches this glob pattern\n"
+		"  --type <typename>         Only list entries whose signature mentions this type\n"
+		"  --use-list <filename>     Write a pg_restore --use-list file out of the matches\n"
+		"  --json                    Format the output using JSON\n",
+		cli_list_db_getopts,
+		cli_list_toc);
+
 
 static CommandLine *list_subcommands[] = {
 	&list_catalogs_command,
@@ -192,6 +213,7 @@ static CommandLine *list_subcommands[] = {
 	&list_depends_command,
 	&list_schema_command,
 	&list_progress_command,
+	&list_toc_command,
 	NULL
 };
 
@@ -261,9 +283,15 @@ cli_list_db_getopts(int argc, char **argv)
 		{ "source", required_argument, NULL, 'S' },
 		{ "dir", required_argument, NULL, 'D' },
 		{ "schema-name", required_argument, NULL, 's' },
+		{ "schema", required_argument, NULL, 's' },
 		{ "table-name", required_argument, NULL, 't' },
 		{ "filter", required_argument, NULL, 'F' },
 		{ "filters", required_argument, NULL, 'F' },
+		{ "dump", required_argument, NULL, 'p' },
+		{ "restore-list", required_argument, NULL, 'i' },
+		{ "name", required_argument, NULL, 'n' },
+		{ "type", required_argument, NULL, 'T' },
+		{ "use-list", required_argument, NULL, 'o' },
 		{ "list-skipped", no_argument, NULL, 'x' },
 		{ "without-pkey", no_argument, NULL, 'P' },
 		{ "split-tables-larger-than", required_argument, NULL, 'L' },
@@ -298,7 +326,7 @@ cli_list_db_getopts(int argc, char **argv)
 		exit(EXIT_CODE_BAD_ARGS);
 	}
 
-	const char *optstring = "S:D:s:t:F:xPL:u:k:mfyarJRIN:Vdzvqh";
+	const char *optstring = "S:D:s:t:F:p:i:n:T:o:xPL:u:k:mfyarJRIN:Vdzvqh";
 
 	while ((c = getopt_long(argc, argv, optstring,
 							long_options, &option_index)) != -1)
@@ -350,6 +378,41 @@ cli_list_db_getopts(int argc, char **argv)
 							  options.filterFileName);
 					++errors;
 				}
+				break;
+			}
+
+			case 'p':
+			{
+				strlcpy(options.dumpFilename, optarg, MAXPGPATH);
+				log_trace("--dump \"%s\"", options.dumpFilename);
+				break;
+			}
+
+			case 'i':
+			{
+				strlcpy(options.restoreListFilename, optarg, MAXPGPATH);
+				log_trace("--restore-list \"%s\"", options.restoreListFilename);
+				break;
+			}
+
+			case 'n':
+			{
+				strlcpy(options.tocNamePattern, optarg, PG_NAMEDATALEN);
+				log_trace("--name \"%s\"", options.tocNamePattern);
+				break;
+			}
+
+			case 'T':
+			{
+				strlcpy(options.tocTypePattern, optarg, PG_NAMEDATALEN);
+				log_trace("--type \"%s\"", options.tocTypePattern);
+				break;
+			}
+
+			case 'o':
+			{
+				strlcpy(options.useListFilename, optarg, MAXPGPATH);
+				log_trace("--use-list \"%s\"", options.useListFilename);
 				break;
 			}
 
@@ -543,14 +606,27 @@ cli_list_db_getopts(int argc, char **argv)
 		}
 	}
 
-	if (options.connStrings.source_pguri == NULL)
+	/*
+	 * "list toc" is the one subcommand in this family that can run fully
+	 * offline, against a dump file or a saved pg_restore --list output,
+	 * with no source database involved -- unless it's also asked to apply
+	 * pgcopydb's own filters, which are defined in terms of schema/table
+	 * names and need a live connection to resolve to real OIDs.
+	 */
+	bool tocModeWithoutSource =
+		(!IS_EMPTY_STRING_BUFFER(options.dumpFilename) ||
+		 !IS_EMPTY_STRING_BUFFER(options.restoreListFilename)) &&
+		IS_EMPTY_STRING_BUFFER(options.filterFileName);
+
+	if (options.connStrings.source_pguri == NULL && !tocModeWithoutSource)
 	{
 		log_fatal("Option --source is mandatory");
 		++errors;
 	}
 
 	/* prepare safe versions of the connection strings (without password) */
-	if (!cli_prepare_pguris(&(options.connStrings)))
+	if (options.connStrings.source_pguri != NULL &&
+		!cli_prepare_pguris(&(options.connStrings)))
 	{
 		/* errors have already been logged */
 		exit(EXIT_CODE_INTERNAL_ERROR);
@@ -2128,6 +2204,435 @@ cli_list_progress(int argc, char **argv)
 	}
 
 	(void) catalog_close(sourceDB);
+}
+
+
+/*
+ * CliListTocContext is the iteration context used by cli_list_toc_hook.
+ */
+typedef struct CliListTocContext
+{
+	CopyDataSpec *specs;     /* NULL unless --filter (and --source) is used */
+	FILE *useListStream;     /* NULL unless --use-list is used */
+	int matched;
+} CliListTocContext;
+
+
+/*
+ * cli_list_toc lists (and optionally filters) the Table of Contents of a
+ * pg_dump custom-format archive, using the flex-lexer-based TOC parser
+ * (archive_toc_parser.c) rather than grepping pg_restore --list output by
+ * hand -- the approach most people reach for, since pg_dump/pg_restore's
+ * own filtering (-n/-t/-N/-T, and the --filter files PostgreSQL 17 added)
+ * only covers schema- and table-name filtering, and operates by querying
+ * the source catalogs again, not by filtering an already-captured TOC.
+ * Filtering an existing TOC file is useful on its own (inspecting or
+ * tweaking a dump you already made, without a live connection at all), and
+ * it is also the only way to filter on the structured fields this new
+ * parser extracts that pg_dump has no concept of, such as "any function
+ * whose signature mentions this type".
+ */
+static void
+cli_list_toc(int argc, char **argv)
+{
+	if (IS_EMPTY_STRING_BUFFER(listDBoptions.dumpFilename) &&
+		IS_EMPTY_STRING_BUFFER(listDBoptions.restoreListFilename))
+	{
+		log_fatal("Please use either --dump or --restore-list");
+		exit(EXIT_CODE_BAD_ARGS);
+	}
+
+	bool useFilters = !IS_EMPTY_STRING_BUFFER(listDBoptions.filterFileName);
+
+	CopyDataSpec copySpecs = { 0 };
+	PostgresPaths standalonePgPaths = { 0 };
+	PostgresPaths *pgPaths = NULL;
+
+	if (useFilters)
+	{
+		/*
+		 * pgcopydb filters are defined in terms of schema and table names
+		 * (see filtering.c); applying them to a TOC means resolving those
+		 * names to the real OIDs of the source database, the same way
+		 * copydb_write_restore_list_hook does during an actual restore --
+		 * so this needs a live --source connection, same as every other
+		 * command in this family that takes --filter.
+		 */
+		bool createWorkDir = true;
+
+		if (!copydb_init_specs_from_listdboptions(&copySpecs,
+												  &listDBoptions,
+												  DATA_SECTION_ALL,
+												  createWorkDir))
+		{
+			/* errors have already been logged */
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		if (!parse_filters(listDBoptions.filterFileName, &(copySpecs.filters)))
+		{
+			log_error("Failed to parse filters in file \"%s\"",
+					  listDBoptions.filterFileName);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		copySpecs.fetchFilteredOids = true;
+
+		if (!copydb_fetch_schema_and_prepare_specs(&copySpecs))
+		{
+			log_error("Failed to fetch a local copy of the catalogs, "
+					  "see above for details");
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+
+		pgPaths = &(copySpecs.pgPaths);
+	}
+	else
+	{
+		(void) find_pg_commands(&standalonePgPaths);
+		pgPaths = &standalonePgPaths;
+	}
+
+	char listFilename[MAXPGPATH] = { 0 };
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.restoreListFilename))
+	{
+		if (!file_exists(listDBoptions.restoreListFilename))
+		{
+			log_fatal("Restore list file \"%s\" does not exist",
+					  listDBoptions.restoreListFilename);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		strlcpy(listFilename, listDBoptions.restoreListFilename, MAXPGPATH);
+	}
+	else
+	{
+		if (!file_exists(listDBoptions.dumpFilename))
+		{
+			log_fatal("Dump file \"%s\" does not exist",
+					  listDBoptions.dumpFilename);
+			exit(EXIT_CODE_BAD_ARGS);
+		}
+
+		sformat(listFilename, sizeof(listFilename), "%s.toc.list",
+				listDBoptions.dumpFilename);
+
+		if (!pg_restore_list(pgPaths, listDBoptions.dumpFilename, listFilename))
+		{
+			log_fatal("Failed to list the Table of Contents of \"%s\", "
+					  "see above for details",
+					  listDBoptions.dumpFilename);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+
+	FILE *useListStream = NULL;
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.useListFilename))
+	{
+		useListStream = fopen_with_umask(listDBoptions.useListFilename,
+										 "wb",
+										 FOPEN_FLAGS_W,
+										 0644);
+
+		if (useListStream == NULL)
+		{
+			log_fatal("Failed to open \"%s\" for writing",
+					  listDBoptions.useListFilename);
+			exit(EXIT_CODE_INTERNAL_ERROR);
+		}
+	}
+
+	CliListTocContext context = {
+		.specs = useFilters ? &copySpecs : NULL,
+		.useListStream = useListStream,
+		.matched = 0
+	};
+
+	if (!outputJSON)
+	{
+		fformat(stdout, "%8s | %-22s | %-18s | %-28s | %-15s\n",
+				"OID", "Tag", "Schema", "Name", "Owner");
+
+		fformat(stdout, "%8s-+-%-22s-+-%-18s-+-%-28s-+-%-15s\n",
+				"--------",
+				"----------------------",
+				"------------------",
+				"----------------------------",
+				"---------------");
+	}
+	else
+	{
+		fformat(stdout, "[\n");
+	}
+
+	if (!archive_iter_toc(listFilename, &context, cli_list_toc_hook))
+	{
+		log_error("Failed to list the archive Table of Contents, "
+				  "see above for details");
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	if (outputJSON)
+	{
+		fformat(stdout, "\n]\n");
+	}
+
+	if (useListStream != NULL && fclose(useListStream) == EOF)
+	{
+		log_error("Failed to write file \"%s\"", listDBoptions.useListFilename);
+		exit(EXIT_CODE_INTERNAL_ERROR);
+	}
+
+	log_info("%d archive TOC entries matched", context.matched);
+}
+
+
+/*
+ * cli_list_toc_hook is the archive_iter_toc callback used by cli_list_toc:
+ * it applies the --schema-name/--name/--type ad hoc filters (purely on the
+ * parsed fields, no catalog needed) and, when --filter was used, pgcopydb's
+ * own OID-based filtering (copydb_objectid_is_filtered_out, the same check
+ * an actual restore would apply), then prints matches and/or appends them
+ * (or their skipped, ";"-commented counterpart) to the --use-list output.
+ */
+static bool
+cli_list_toc_hook(void *ctx, ArchiveContentItem *item)
+{
+	CliListTocContext *context = (CliListTocContext *) ctx;
+
+	bool skip = false;
+
+	if (!IS_EMPTY_STRING_BUFFER(listDBoptions.schema_name) &&
+		!streq(item->nspname, listDBoptions.schema_name))
+	{
+		skip = true;
+	}
+
+	if (!skip && !IS_EMPTY_STRING_BUFFER(listDBoptions.tocNamePattern))
+	{
+		const char *name =
+			!IS_EMPTY_STRING_BUFFER(item->relname) ? item->relname : item->name;
+
+		if (fnmatch(listDBoptions.tocNamePattern, name, 0) != 0)
+		{
+			skip = true;
+		}
+	}
+
+	/*
+	 * "functions/casts/transforms with parameters of this type": item->name
+	 * holds the whole opaque signature text for a top-level CAST/USER
+	 * MAPPING/DEFAULT ACL/TRANSFORM entry still (archive_toc_grammar.y's
+	 * TOP_CAST/TOP_USER_MAPPING/TOP_DEFAULT_ACL/TOP_TRANSFORM productions
+	 * don't narrow item->name itself, only add further fields alongside
+	 * it); for FUNCTION/PROCEDURE/AGGREGATE (either the plain entry or its
+	 * ACL/COMMENT), the signature is split out instead --
+	 * item->signature.argsText -- and for OPERATOR, item->operatorArgs.
+	 * leftArg/rightArg, for CAST/TRANSFORM, item->cast.sourceType/
+	 * targetType and item->transform.type -- so check whichever of those
+	 * applies too.
+	 * Matching is still a plain substring search, not a parse of the
+	 * argument list: pg_dump's own TOC format doesn't split out individual
+	 * argument types either, and going that far isn't worth it (see this
+	 * PR's own description for why).
+	 */
+	if (!skip && !IS_EMPTY_STRING_BUFFER(listDBoptions.tocTypePattern))
+	{
+		const char *pattern = listDBoptions.tocTypePattern;
+
+		bool found =
+			(!IS_EMPTY_STRING_BUFFER(item->name) &&
+			 strstr(item->name, pattern) != NULL) ||
+			(item->signature.argsText != NULL &&
+			 strstr(item->signature.argsText, pattern) != NULL) ||
+			(item->operatorArgs.hasLeftArg &&
+			 strstr(item->operatorArgs.leftArg, pattern) != NULL) ||
+			(item->operatorArgs.hasRightArg &&
+			 strstr(item->operatorArgs.rightArg, pattern) != NULL) ||
+			(item->cast.sourceType != NULL &&
+			 (strstr(item->cast.sourceType, pattern) != NULL ||
+			  strstr(item->cast.targetType, pattern) != NULL)) ||
+			(item->transform.type != NULL &&
+			 strstr(item->transform.type, pattern) != NULL);
+
+		if (!found)
+		{
+			skip = true;
+		}
+	}
+
+	if (!skip && context->specs != NULL &&
+		copydb_objectid_is_filtered_out(context->specs, item))
+	{
+		skip = true;
+	}
+
+	if (!skip)
+	{
+		if (context->matched > 0 && outputJSON)
+		{
+			fformat(stdout, ",\n");
+		}
+
+		if (outputJSON)
+		{
+			JSON_Value *js = json_value_init_object();
+			JSON_Object *jsobj = json_value_get_object(js);
+
+			json_object_set_number(jsobj, "dumpId", item->dumpId);
+			json_object_set_number(jsobj, "catalogOid", item->catalogOid);
+			json_object_set_number(jsobj, "objectOid", item->objectOid);
+			json_object_set_string(jsobj, "tag",
+								   item->description ? item->description : "");
+			json_object_set_string(jsobj, "schema", item->nspname);
+			json_object_set_string(jsobj, "relation", item->relname);
+			json_object_set_string(jsobj, "name", item->name);
+			json_object_set_string(jsobj, "owner", item->owner);
+
+			/*
+			 * FUNCTION/PROCEDURE/AGGREGATE (either the plain entry or its
+			 * ACL/COMMENT): the raw argument-list text, and that same
+			 * text split on its own top-level commas.
+			 */
+			if (item->signature.argsText != NULL)
+			{
+				json_object_set_string(jsobj, "args", item->signature.argsText);
+
+				JSON_Value *jsArgs = json_value_init_array();
+				JSON_Array *jsArgsArray = json_value_get_array(jsArgs);
+
+				for (int i = 0; i < item->signature.argsCount; i++)
+				{
+					json_array_append_string(jsArgsArray, item->signature.args[i]);
+				}
+
+				json_object_set_value(jsobj, "argsList", jsArgs);
+			}
+
+			/*
+			 * OPERATOR (ACL/COMMENT only): the left/right operand type,
+			 * empty when that side is NONE (a prefix or postfix operator
+			 * missing it).
+			 */
+			if (item->operatorArgs.hasLeftArg || item->operatorArgs.hasRightArg)
+			{
+				json_object_set_string(jsobj, "leftArg",
+									   item->operatorArgs.hasLeftArg
+									   ? item->operatorArgs.leftArg : "");
+				json_object_set_string(jsobj, "rightArg",
+									   item->operatorArgs.hasRightArg
+									   ? item->operatorArgs.rightArg : "");
+			}
+
+			/*
+			 * The "overlapping fields" (see pgcmd.h): CAST, USER MAPPING,
+			 * DEFAULT ACL, TRANSFORM, and an OPERATOR CLASS/FAMILY
+			 * ACL/COMMENT's own access method.
+			 */
+			if (item->cast.sourceType != NULL)
+			{
+				json_object_set_string(jsobj, "castSourceType",
+									   item->cast.sourceType);
+				json_object_set_string(jsobj, "castTargetType",
+									   item->cast.targetType);
+			}
+
+			if (!IS_EMPTY_STRING_BUFFER(item->userMapping.user))
+			{
+				json_object_set_string(jsobj, "userMappingUser",
+									   item->userMapping.user);
+				json_object_set_string(jsobj, "userMappingServer",
+									   item->userMapping.server);
+			}
+
+			if (!IS_EMPTY_STRING_BUFFER(item->defaultAclObjectType))
+			{
+				json_object_set_string(jsobj, "defaultAclObjectType",
+									   item->defaultAclObjectType);
+			}
+
+			if (item->transform.type != NULL)
+			{
+				json_object_set_string(jsobj, "transformType",
+									   item->transform.type);
+				json_object_set_string(jsobj, "transformLanguage",
+									   item->transform.language);
+			}
+
+			if (!IS_EMPTY_STRING_BUFFER(item->opClassFamily.accessMethod))
+			{
+				json_object_set_string(jsobj, "accessMethod",
+									   item->opClassFamily.accessMethod);
+			}
+
+			char *serialized = json_serialize_to_string(js);
+
+			fformat(stdout, "%s", serialized);
+
+			json_free_serialized_string(serialized);
+			json_value_free(js);
+		}
+		else
+		{
+			fformat(stdout, "%8d | %-22s | %-18s | %-28s | %-15s\n",
+					item->dumpId,
+					item->description ? item->description : "",
+					item->nspname,
+					!IS_EMPTY_STRING_BUFFER(item->relname)
+					? item->relname
+					: item->name,
+					item->owner);
+		}
+
+		++context->matched;
+	}
+
+	if (context->useListStream != NULL)
+	{
+		PQExpBuffer buf = createPQExpBuffer();
+
+		/*
+		 * useListRemainder, when set, is the faithful original-line text
+		 * (object type included for an ACL/COMMENT entry); restoreListName
+		 * is deliberately not that for those entries (see its own comment
+		 * in pgcmd.h), so only fall back to it for entries that have no
+		 * useListRemainder at all -- every non-ACL/COMMENT shape.
+		 */
+		const char *remainder =
+			item->useListRemainder != NULL
+			? item->useListRemainder
+			: (item->restoreListName != NULL ? item->restoreListName : "");
+
+		printfPQExpBuffer(buf, "%s%d; %u %u %s %s\n",
+						  skip ? ";" : "",
+						  item->dumpId,
+						  item->catalogOid,
+						  item->objectOid,
+						  item->description ? item->description : "",
+						  remainder);
+
+		if (PQExpBufferBroken(buf))
+		{
+			log_error("Failed to write --use-list entry: out of memory");
+			destroyPQExpBuffer(buf);
+			return false;
+		}
+
+		bool ok = write_to_stream(context->useListStream, buf->data, buf->len);
+
+		destroyPQExpBuffer(buf);
+
+		if (!ok)
+		{
+			log_error("Failed to write file \"%s\", see above for details",
+					  listDBoptions.useListFilename);
+			return false;
+		}
+	}
+
+	return true;
 }
 
 

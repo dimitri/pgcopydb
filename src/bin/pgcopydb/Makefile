@@ -14,8 +14,15 @@ SQLITE3_LIB = $(SQLITE3_DIR)sqlite3.o
 
 INCLUDES  = $(patsubst ${SRC_DIR}%.h,%.h,$(wildcard ${SRC_DIR}*.h))
 
-SRC   = $(patsubst ${SRC_DIR}%.c,%.c,$(wildcard ${SRC_DIR}*.c))
+# archive_toc_lexer.c/archive_toc_grammar.c are generated (see the flex/
+# bison rules below) rather than hand-written, so they may not exist yet
+# when this wildcard is evaluated on a fresh checkout; exclude them here
+# and add archive_toc_lexer.o/archive_toc_grammar.o below unconditionally,
+# instead of depending on the wildcard to find them.
+SRC   = $(patsubst ${SRC_DIR}%.c,%.c,$(filter-out ${SRC_DIR}archive_toc_lexer.c ${SRC_DIR}archive_toc_grammar.c,$(wildcard ${SRC_DIR}*.c)))
 OBJS  = $(patsubst %.c,%.o,$(SRC))
+OBJS += archive_toc_lexer.o
+OBJS += archive_toc_grammar.o
 OBJS += lib-log.o lib-commandline.o lib-parson.o
 OBJS += lib-snprintf.o lib-strerror.o lib-dumputils.o lib-string_utils.o
 OBJS += lib-lookup3.o
@@ -183,5 +190,43 @@ sql_queries.o: $(SRC_DIR)sql/sql_queries_data.inc
 
 gen-sql: $(SRC_DIR)sql/sql_queries_data.inc
 
-.PHONY: all monitor clean gen-sql
+FLEX  ?= flex
+BISON ?= bison
+
+# archive_toc_grammar.c/.h are generated from archive_toc_grammar.y, and
+# archive_toc_lexer.c from archive_toc_lexer.l, the same way PostgreSQL
+# generates gram.c/scan.c from gram.y/scan.l: neither is tracked in git
+# (see .gitignore) and both are rebuilt here whenever missing or older
+# than their own source. Building from a checkout therefore requires
+# flex and bison, same as PostgreSQL itself does.
+#
+# archive_toc_lexer.l #includes the bison-generated archive_toc_grammar.h
+# (for the token codes archive_toc_lexer.c returns), so that one extra
+# prerequisite below makes sure bison has already run before flex does,
+# on a from-scratch build where neither generated file exists yet.
+#
+# Every target/prerequisite here must be spelled with the same (here,
+# relative) names used elsewhere in this Makefile to build archive_toc_
+# lexer.o/archive_toc_grammar.o -- $(SRC_DIR)-prefixed absolute paths are
+# a different string to make, so the implicit %.o: %.c chain wouldn't
+# find these rules, falling back to make's own built-in %.c: %.l and
+# %.c: %.y rules (which run plain "lex"/"yacc", not $(FLEX)/$(BISON), and
+# treat the result as a disposable intermediate file, deleting it right
+# after the build).
+archive_toc_grammar.c archive_toc_grammar.h: archive_toc_grammar.y
+	$(BISON) -d -o archive_toc_grammar.c $<
+
+archive_toc_lexer.c: archive_toc_lexer.l archive_toc_grammar.h
+	$(FLEX) -o $@ $<
+
+# archive_toc_parser.c and archive_toc_grammar.c itself also #include
+# archive_toc_grammar.h directly; on a from-scratch parallel build (no
+# .deps/*.Po files yet to carry this automatically) make has no other
+# way to know archive_toc_parser.o needs bison to have run first, same
+# ordering hazard the lexer rule above already guards against.
+archive_toc_parser.o: archive_toc_grammar.h
+
+gen-lexer: archive_toc_lexer.c archive_toc_grammar.c
+
+.PHONY: all monitor clean gen-sql gen-lexer
 .PHONY: VERSION-FILE

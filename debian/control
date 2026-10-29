@@ -5,12 +5,15 @@ Maintainer: Dimitri Fontaine <dim@tapoueh.org>
 Uploaders:
  Christoph Berg <myon@debian.org>,
 Build-Depends:
+ bison,
  debhelper-compat (= 13),
+ flex,
  libedit-dev,
  libgc-dev,
  libkrb5-dev,
  liblz4-dev,
  libncurses-dev,
+ libnuma-dev,
  libpam0g-dev,
  libreadline-dev,
  libselinux1-dev,
