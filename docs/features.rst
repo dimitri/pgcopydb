@@ -132,11 +132,13 @@ transaction granularity, and the system can be safely paused/resumed from the
 last applied LSN position.
 
 The two SQLite files are a buffer between the source and the target, not the
-system of record. The replication slot on the source only moves forward to
-what the apply process has committed on the target, and it is from there that
-streaming restarts, so what an operating system crash takes from the last
-commits of either file is received again. They are opened in WAL mode with
-``synchronous = NORMAL``, which does not wait for the disk at every commit.
+system of record. They are opened in WAL mode with ``synchronous = NORMAL``,
+which does not wait for the disk at every commit, and receive syncs the output
+table before it tells the source what it may forget: the replication slot on
+the source moves forward to what receive has safely spooled, not to what the
+apply process has committed on the target, so the WAL does not pile up on the
+source while the initial copy runs. What an operating system crash takes from
+the last commits of the replay table is transformed again.
 
 Both processes work in groups, to keep the cost of a commit from being paid
 for every message. Receive commits to the output table when the stream has no
