@@ -136,6 +136,31 @@ static bool archive_toc_expect_domain = false;
 static bool archive_toc_expect_transform_kw = false;
 
 /*
+ * archive_toc_structured_shape gates the nine fixed-separator keyword
+ * patterns below (AS, FOR, LANGUAGE, SERVER, USING, ON, CAST, USER
+ * MAPPING's own repeated tag word, DEFAULT ACL's own repeated tag word):
+ * each is pg_dump's own fixed, hard-coded separator for exactly one
+ * further-structured shape (CAST, TRANSFORM, USER MAPPING, DEFAULT ACL,
+ * an OPERATOR CLASS/FAMILY ACL/COMMENT, a relation-owned ACL/COMMENT),
+ * never for any other tag's own name/relname/wordname field -- those
+ * are raw, unescaped, caller-controlled text with no keyword convention
+ * of their own (see TOCBODY's own file-header comment), so a table
+ * literally named `... AS (SELECT ...` (a real, already-hit regression,
+ * not a hypothetical: see tests/unit/setup/6-multiline-table-name.sql)
+ * must scan its " AS " run as plain WORD/SPACE text, not the AS token.
+ *
+ * Unlike archive_toc_expect_domain/_transform_kw (single-token lookahead,
+ * consumed on the very next match), this one stays set for the entire
+ * rest of the current entry: archive_toc_tag_token sets it exactly once,
+ * at the one point that already knows this entry's whole shape, and
+ * every TOP_ or NESTED_ production that actually uses one of these nine
+ * keywords only does so somewhere inside that same entry's own body, an
+ * arbitrary number of WORDs later (CAST's own castSourceType, TRANSFORM's
+ * own typename, ...) -- too far ahead for a single-token flag to reach.
+ */
+static bool archive_toc_structured_shape = false;
+
+/*
  * archive_toc_token_end is the end of whichever token archive_toc_lex()
  * just matched, as a raw pointer into flex's own stable internal scan
  * buffer (the one yy_scan_string allocates and keeps for as long as the
@@ -305,8 +330,25 @@ const char *archive_toc_token_end;
    * comment); DOMAIN and TRANSFORM_KW are the two keywords left that
    * genuinely need post-match recognition instead, since neither has a
    * whitespace convention of its own to bake into a dedicated pattern.
+   *
+   * Flex's longest-match rule means these would ALSO win over the
+   * plain SPACE/WORD rules below for any OTHER tag's own name/relname/
+   * wordname field that merely happens to contain one of these six
+   * words padded by spaces -- a real, already-hit regression (see
+   * archive_toc_structured_shape's own comment, above the first %%),
+   * not a hypothetical, since those fields are raw, caller-controlled
+   * text with no keyword convention of their own. Each action below
+   * REJECTs when archive_toc_structured_shape is false, which hands
+   * flex's own matching back to the next-longest alternative for this
+   * same starting position -- here, the plain " "+ SPACE rule, leaving
+   * the keyword text itself (e.g. "AS") to the generic WORD rule right
+   * after it, exactly as if this pattern had never matched at all.
    */
-" "+"AS"" "+                       { return AS; }
+" "+"AS"" "+                       { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     return AS; }
   /*
    * FOR's own leading space is "zero or more", not "one or more" like
    * the rest of this block: NESTED_TRANSFORM reaches it with no
@@ -316,12 +358,32 @@ const char *archive_toc_token_end;
    * tokens ahead of it, which still leave FOR's own leading space
    * alone, see CAST_KW/TRANSFORM_KW/DEFAULT_ACL_KW's own comments).
    */
-" "*"FOR"" "+                      { archive_toc_lval.pos = yytext + strspn(yytext, " ");
+" "*"FOR"" "+                      { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     archive_toc_lval.pos = yytext + strspn(yytext, " ");
                                      return FOR; }
-" "+"LANGUAGE"" "+                 { return LANGUAGE_KW; }
-" "+"SERVER"" "+                   { return SERVER_KW; }
-" "+"USING"" "+                    { return USING; }
-" "+"ON"" "+                       { archive_toc_expect_domain = true;
+" "+"LANGUAGE"" "+                 { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     return LANGUAGE_KW; }
+" "+"SERVER"" "+                   { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     return SERVER_KW; }
+" "+"USING"" "+                    { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     return USING; }
+" "+"ON"" "+                       { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     archive_toc_expect_domain = true;
                                      return ON; }
 
   /*
@@ -338,10 +400,26 @@ const char *archive_toc_token_end;
    * TRANSFORM_KW below -- but its one internal space, between the two
    * words, is still part of this single fixed literal, not something
    * a later token could ever consume on its own.
+   *
+   * Same archive_toc_structured_shape REJECT guard as the six above --
+   * a table literally named `CAST (something)` must still scan as a
+   * plain WORD when it is TOP_SIMPLE's own name, not CAST_KW.
    */
-"CAST"" "+                         { return CAST_KW; }
-"USER"" "+"MAPPING"" "+            { return USER_MAPPING_KW; }
-"DEFAULT"" "+"PRIVILEGES"          { return DEFAULT_ACL_KW; }
+"CAST"" "+                         { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     return CAST_KW; }
+"USER"" "+"MAPPING"" "+            { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     return USER_MAPPING_KW; }
+"DEFAULT"" "+"PRIVILEGES"          { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     return DEFAULT_ACL_KW; }
 
 " "+                               { archive_toc_lval.pos = archive_toc_token_end;
                                      return SPACE; }
@@ -364,8 +442,18 @@ const char *archive_toc_token_end;
 
 " "+$                              { return NO_OWNER; }
 
-  /* NESTED_ON_RELATION's own " ON " separator -- see TOCBODY's own rule. */
-" "+"ON"" "+                       { archive_toc_expect_domain = true;
+  /*
+   * NESTED_ON_RELATION's own " ON " separator -- see TOCBODY's own rule
+   * and archive_toc_structured_shape's own comment, above the first %%.
+   * TOCQBODY is also reached by NESTED_RELATION_LIKE/COLUMN/FUNCLIKE/
+   * OPERATOR, none of which ever expect ON, so the same REJECT guard
+   * applies here too (e.g. a quoted column name containing " ON ").
+   */
+" "+"ON"" "+                       { if (!archive_toc_structured_shape)
+                                     {
+                                         REJECT;
+                                     }
+                                     archive_toc_expect_domain = true;
                                      return ON; }
 
 " "+                               { archive_toc_lval.pos = archive_toc_token_end;
@@ -448,6 +536,14 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 	{
 		BEGIN(NAMESPACE);
 
+		/*
+		 * Reset here, unconditionally, before either switch below can set
+		 * it true: every case that doesn't explicitly opt in (TOP_SIMPLE's
+		 * own default included) must come out of this function with it
+		 * false, since that default case is reached by far the most tags.
+		 */
+		archive_toc_structured_shape = false;
+
 		switch (desc)
 		{
 			case ARCHIVE_TAG_ACL:
@@ -474,22 +570,26 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 
 			case ARCHIVE_TAG_CAST:
 			{
+				archive_toc_structured_shape = true;
 				return TOP_CAST;
 			}
 
 			case ARCHIVE_TAG_TRANSFORM:
 			{
+				archive_toc_structured_shape = true;
 				archive_toc_expect_transform_kw = true;
 				return TOP_TRANSFORM;
 			}
 
 			case ARCHIVE_TAG_USER_MAPPING:
 			{
+				archive_toc_structured_shape = true;
 				return TOP_USER_MAPPING;
 			}
 
 			case ARCHIVE_TAG_DEFAULT_ACL:
 			{
+				archive_toc_structured_shape = true;
 				return TOP_DEFAULT_ACL;
 			}
 
@@ -552,6 +652,8 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 		 * another character, not a quote to unescape. TOCQBODY is
 		 * TOCBODY's quote-aware twin, see the file header.
 		 */
+		archive_toc_structured_shape = false;
+
 		switch (desc)
 		{
 			case ARCHIVE_TAG_TABLE:
@@ -583,6 +685,7 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_RULE:
 			{
 				BEGIN(TOCQBODY);
+				archive_toc_structured_shape = true;
 				return NESTED_ON_RELATION;
 			}
 
@@ -603,12 +706,14 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_CAST:
 			{
 				BEGIN(TOCBODY);
+				archive_toc_structured_shape = true;
 				return NESTED_CAST;
 			}
 
 			case ARCHIVE_TAG_TRANSFORM:
 			{
 				BEGIN(TOCBODY);
+				archive_toc_structured_shape = true;
 				archive_toc_expect_transform_kw = true;
 				return NESTED_TRANSFORM;
 			}
@@ -617,6 +722,7 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_OPERATOR_FAMILY:
 			{
 				BEGIN(TOCBODY);
+				archive_toc_structured_shape = true;
 				return NESTED_OPCLASS_FAMILY;
 			}
 
