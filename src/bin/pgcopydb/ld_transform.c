@@ -174,6 +174,12 @@ stream_transform_context_init(StreamSpecs *specs)
  * static hook to parse each JSON row from outputDB and write the corresponding
  * parameterised SQL into replayDB (stmt + replay tables).
  *
+ * One call is a pass: it keeps going, a transaction at a time, while the next
+ * thing in outputDB is a complete transaction, up to
+ * STREAM_TRANSFORM_BATCH_MAX_TXNS of them, and commits what it wrote to
+ * replayDB once at the end.  A marker (KEEPALIVE) ends the pass: it has a
+ * cursor of its own that only the apply process advances.
+ *
  * KEEPALIVE and SWITCH markers are selected by keepaliveLSN instead, the
  * position of the last marker the apply consumed.  previousLSN cannot serve:
  * a marker carries the server's walEnd and sits above transactions that
@@ -187,8 +193,8 @@ stream_transform_from_outputdb(StreamSpecs *specs,
 							   uint64_t previousLSN,
 							   uint64_t keepaliveLSN)
 {
-	/* tell ld_store_iter_output where to start (last committed LSN) */
-	specs->sentinel.replay_lsn = previousLSN;
+	DatabaseCatalog *replayDB = specs->replayDB;
+
 	specs->private.keepaliveLSN = keepaliveLSN;
 
 
@@ -196,14 +202,73 @@ stream_transform_from_outputdb(StreamSpecs *specs,
 	specs->private.midTxnEndpos = false;
 
 
-	if (!ld_store_iter_output(specs, &stream_transform_cdc_file_hook))
+	DatabaseCatalog *outputDB = specs->outputDB;
+
+	/*
+	 * One SQLite transaction on replayDB for the whole pass: a commit is a
+	 * sync, and doing one per statement made it the cost of transforming a
+	 * transaction.  And one on outputDB, which only reads: it gives the pass
+	 * a single snapshot of what receive has committed, and the pass reads
+	 * without the catalog semaphore (see ld_store_iter_output).
+	 */
+	if (!catalog_begin(replayDB, false))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
+	if (!catalog_begin(outputDB, false))
+	{
+		/* errors have already been logged */
+		(void) catalog_execute(replayDB, "ROLLBACK");
+		return false;
+	}
 
-	return true;
+	uint64_t startLSN = previousLSN;
+	bool success = true;
+
+	for (int count = 0; count < STREAM_TRANSFORM_BATCH_MAX_TXNS; count++)
+	{
+		/* tell ld_store_iter_output where to start (last transformed commit) */
+		specs->sentinel.replay_lsn = startLSN;
+		specs->private.transformedCommitLSN = InvalidXLogRecPtr;
+
+		if (!ld_store_iter_output(specs, &stream_transform_cdc_file_hook))
+		{
+			/* errors have already been logged */
+			success = false;
+			break;
+		}
+
+		if (specs->private.transformedCommitLSN == InvalidXLogRecPtr ||
+			specs->private.midTxnEndpos)
+		{
+			break;
+		}
+
+		startLSN = specs->private.transformedCommitLSN;
+
+		if (specs->sentinel.endpos != InvalidXLogRecPtr &&
+			specs->sentinel.endpos <= startLSN)
+		{
+			break;
+		}
+	}
+
+	/* the caller's cursor is what it was: it advances as it applies */
+	specs->sentinel.replay_lsn = previousLSN;
+
+	/* nothing was written to outputDB: this just ends the snapshot */
+	(void) catalog_commit(outputDB);
+
+	if (!(success ? catalog_commit(replayDB) :
+		  catalog_execute(replayDB, "ROLLBACK")))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return success;
 }
 
 
@@ -233,6 +298,15 @@ stream_transform_cdc_file_hook(StreamSpecs *specs,
 
 	/* track progress at this message's LSN */
 	uint64_t lsn = output->lsn;
+
+	/*
+	 * A ROLLBACK is not recorded: ld_store_lookup_output_after_lsn moves past
+	 * COMMIT rows only, so a pass could not continue from one.
+	 */
+	if (output->action == STREAM_ACTION_COMMIT)
+	{
+		specs->private.transformedCommitLSN = lsn;
+	}
 
 	/*
 	 * Record transaction progress in the in-memory apply pipeline state owned
@@ -361,7 +435,11 @@ stream_transform_prepare_message(StreamSpecs *specs,
 
 			if (!parsePgoutputMessage(privateContext,
 									  privateContext->outputDB,
-									  (int64_t) output->id))
+									  (int64_t) output->id,
+									  output->jsonBuffer,
+									  output->nspname,
+									  output->relname,
+									  output->old_type))
 			{
 				log_error("Failed to parse pgoutput columns for output id=%lld",
 						  (long long) output->id);

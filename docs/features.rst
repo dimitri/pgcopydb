@@ -131,6 +131,20 @@ transaction-level synchronization between processes. Changes are applied with
 transaction granularity, and the system can be safely paused/resumed from the
 last applied LSN position.
 
+The two SQLite files are a buffer between the source and the target, not the
+system of record. The replication slot on the source only moves forward to
+what the apply process has committed on the target, and it is from there that
+streaming restarts, so what an operating system crash takes from the last
+commits of either file is received again. They are opened in WAL mode with
+``synchronous = NORMAL``, which does not wait for the disk at every commit.
+
+Both processes work in groups, to keep the cost of a commit from being paid
+for every message. Receive commits to the output table when the stream has no
+more message to read, and otherwise after 10,000 messages or 50 milliseconds,
+then wakes the apply process up. Apply transforms up to 256 transactions in
+one pass, reading the output table as it was when the pass started, and
+commits them to the replay table together.
+
 Internal CDC Storage Format
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

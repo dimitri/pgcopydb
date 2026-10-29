@@ -113,9 +113,14 @@ struct DatabaseCatalog;
 
 bool parsePgoutputMessageActionAndXid(LogicalStreamContext *context);
 bool preparePgoutputMessage(LogicalStreamContext *context);
+char * pgoutputEncodeColumns(PgoutputMessage *pgmsg);
 bool parsePgoutputMessage(struct StreamContext *context,
 						  struct DatabaseCatalog *outputDB,
-						  int64_t outputId);
+						  int64_t outputId,
+						  const char *columns,
+						  const char *nspname,
+						  const char *relname,
+						  char old_type);
 void free_pgoutput_message(PgoutputMessage *msg);
 
 

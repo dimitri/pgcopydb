@@ -3,6 +3,7 @@
  *   Implementations of utility functions for inter-process locking
  */
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <signal.h>
@@ -346,6 +347,41 @@ semaphore_cleanup(const char *pidfile)
 
 
 /*
+ * The nested lock and unlock of a reentrant semaphore ask for our process id,
+ * which is a system call every time, and one that is slow enough on some
+ * platforms to be the main cost of an insert into a catalog.  Remember it, and
+ * forget it in the child of a fork().
+ */
+static pid_t cachedPid = 0;
+
+static void
+forgetCachedPid(void)
+{
+	cachedPid = 0;
+}
+
+
+static pid_t
+semaphore_current_pid(void)
+{
+	static bool registered = false;
+
+	if (cachedPid == 0)
+	{
+		if (!registered)
+		{
+			(void) pthread_atfork(NULL, NULL, forgetCachedPid);
+			registered = true;
+		}
+
+		cachedPid = getpid();
+	}
+
+	return cachedPid;
+}
+
+
+/*
  * semaphore_lock locks a semaphore (decrement count), blocking if count would
  * be < 0
  */
@@ -358,17 +394,18 @@ semaphore_lock(Semaphore *semaphore)
 		return true;
 	}
 
-	if (semaphore->reentrant && semaphore->depth > 0)
+	/*
+	 * Already in the critical section: depth is only meaningful in the process
+	 * that took the lock, a child of it inherits both fields and must still
+	 * wait its turn.  Asking the kernel who holds it, with semctl(), cost two
+	 * system calls for every nested lock.
+	 */
+	if (semaphore->reentrant &&
+		semaphore->depth > 0 &&
+		semaphore->lockedBy == semaphore_current_pid())
 	{
-		int sempid = semctl(semaphore->semId, semaphore->semIndex, GETPID, 0);
-		int semval = semctl(semaphore->semId, semaphore->semIndex, GETVAL, 0);
-
-		/* semval is only zero if we're in the critical section already */
-		if (sempid == getpid() && semval == 0)
-		{
-			++semaphore->depth;
-			return true;
-		}
+		++semaphore->depth;
+		return true;
 	}
 
 	/*
@@ -404,6 +441,7 @@ semaphore_lock(Semaphore *semaphore)
 
 	/* always maintain the depth, even for non-reentrant semaphores */
 	++semaphore->depth;
+	semaphore->lockedBy = semaphore_current_pid();
 
 	return true;
 }
@@ -422,15 +460,12 @@ semaphore_unlock(Semaphore *semaphore)
 	}
 
 	/* unlocking a reentrant semaphore skips an actual semop() call */
-	if (semaphore->reentrant && semaphore->depth > 1)
+	if (semaphore->reentrant &&
+		semaphore->depth > 1 &&
+		semaphore->lockedBy == semaphore_current_pid())
 	{
-		int sempid = semctl(semaphore->semId, semaphore->semIndex, GETPID, 0);
-
-		if (sempid == getpid())
-		{
-			--semaphore->depth;
-			return true;
-		}
+		--semaphore->depth;
+		return true;
 	}
 
 	/*

@@ -76,6 +76,8 @@ stream_init_specs(StreamSpecs *specs,
 	 */
 	specs->pipe_rt[0] = -1;
 	specs->pipe_rt[1] = -1;
+	specs->pipe_wake[0] = -1;
+	specs->pipe_wake[1] = -1;
 
 	specs->paths = *paths;
 	specs->endpos = endpos;
@@ -656,6 +658,7 @@ startLogicalStreaming(StreamSpecs *specs)
 	stream.closeFunction = &streamClose;
 	stream.feedbackFunction = &streamFeedback;
 	stream.keepaliveFunction = &streamKeepalive;
+	stream.idleFunction = &streamIdle;
 
 	/*
 	 * Read possibly already existing file to initialize the start LSN from a
@@ -913,6 +916,142 @@ streamCheckResumePosition(StreamSpecs *specs)
 
 
 /*
+ * streamBeginOutput opens the SQLite transaction that group-commits what
+ * receive writes to output.db, unless one is already open.
+ *
+ * Every insert in its own transaction means one fsync per message, and a
+ * single-row source transaction is at least three messages (BEGIN, the row,
+ * COMMIT), more with the column rows of pgoutput.  The apply process sees
+ * only committed rows, which is what it wants anyway: it starts from a
+ * transaction's COMMIT row.
+ */
+static bool
+streamBeginOutput(StreamContext *privateContext)
+{
+	DatabaseCatalog *outputDB = privateContext->outputDB;
+
+	if (catalog_in_transaction(outputDB))
+	{
+		return true;
+	}
+
+	/*
+	 * The catalog semaphore is held from here to the commit: taking it for
+	 * each insert was a system call or two per message, the single largest
+	 * cost of receiving a large transaction, and nothing else writes to
+	 * output.db.  The inserts lock it again, which costs nothing when this
+	 * process already holds it.
+	 */
+	if (!semaphore_lock(&(outputDB->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (!catalog_begin(outputDB, false))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(outputDB->sema));
+		return false;
+	}
+
+	privateContext->outputPendingMessages = 0;
+	privateContext->outputBatchStartTime = feGetCurrentTimestamp();
+
+	return true;
+}
+
+
+/*
+ * streamCommitOutput commits the open output.db transaction, if any: it makes
+ * the messages written since streamBeginOutput durable and visible to the
+ * apply process.
+ */
+static bool
+streamCommitOutput(StreamContext *privateContext)
+{
+	DatabaseCatalog *outputDB = privateContext->outputDB;
+
+	if (outputDB == NULL || !catalog_in_transaction(outputDB))
+	{
+		return true;
+	}
+
+	bool committed = catalog_commit(outputDB);
+
+	(void) semaphore_unlock(&(outputDB->sema));
+
+	if (!committed)
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	privateContext->outputPendingMessages = 0;
+
+	/* tell the apply process there is something new to look at */
+	StreamSpecs *specs = privateContext->specs;
+
+	if (specs != NULL && specs->pipe_wake[1] > 0)
+	{
+		/* a full pipe (EAGAIN) means a wake-up is already pending */
+		char bell = '!';
+		ssize_t ignored = write(specs->pipe_wake[1], &bell, 1);
+
+		(void) ignored;
+	}
+
+	return true;
+}
+
+
+/*
+ * streamCommitOutputIfDue is called after each message written to output.db.
+ * Receive commits when the stream runs dry (streamIdle) and at flush time
+ * (streamFlush); this adds the two bounds that matter when the source keeps
+ * sending: how many messages a commit may cover, and how long the apply
+ * process may wait to see the first of them.  The age is only checked at a
+ * transaction boundary, so the usual commit does not split a transaction.
+ */
+static bool
+streamCommitOutputIfDue(StreamContext *privateContext, bool txnBoundary)
+{
+	privateContext->outputPendingMessages++;
+
+	if (privateContext->outputPendingMessages >= STREAM_OUTPUT_BATCH_MAX_MESSAGES)
+	{
+		return streamCommitOutput(privateContext);
+	}
+
+	if (txnBoundary &&
+		feTimestampDifferenceExceeds(privateContext->outputBatchStartTime,
+									 feGetCurrentTimestamp(),
+									 STREAM_OUTPUT_BATCH_MAX_AGE_MS))
+	{
+		return streamCommitOutput(privateContext);
+	}
+
+	return true;
+}
+
+
+/*
+ * streamIdle is a callback function for our LogicalStreamClient.
+ *
+ * This function is called when there is no message left to read: a batch that
+ * is not full has nothing to wait for, so commit it now rather than leave the
+ * apply process without it until the next message arrives.
+ */
+bool
+streamIdle(LogicalStreamContext *context)
+{
+	StreamContext *privateContext = (StreamContext *) context->private;
+
+	return streamCommitOutput(privateContext);
+}
+
+
+/*
  * streamWrite is a callback function for our LogicalStreamClient.
  *
  * This function is called for each message received in pgsql_stream_logical.
@@ -970,6 +1109,13 @@ streamWrite(LogicalStreamContext *context)
 			context->onRetry = false;
 		}
 
+		/* group the inserts into one transaction, see streamBeginOutput */
+		if (!streamBeginOutput(privateContext))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
 		/* insert the message to our current SQLite logical decoding file */
 		if (privateContext->plugin == STREAM_PLUGIN_PGOUTPUT)
 		{
@@ -988,6 +1134,15 @@ streamWrite(LogicalStreamContext *context)
 				/* errors have already been logged */
 				return false;
 			}
+		}
+
+		bool txnBoundary = metadata->action == STREAM_ACTION_COMMIT ||
+						   metadata->action == STREAM_ACTION_ROLLBACK;
+
+		if (!streamCommitOutputIfDue(privateContext, txnBoundary))
+		{
+			/* errors have already been logged */
+			return false;
 		}
 	}
 
@@ -1053,6 +1208,13 @@ streamWrite(LogicalStreamContext *context)
 						 specs->outputDB->dbfile,
 						 (long long) st.st_size,
 						 (unsigned long long) specs->maxReplayDBSize);
+
+				/* nothing may stay uncommitted in the file we are leaving */
+				if (!streamCommitOutput(privateContext))
+				{
+					/* errors have already been logged */
+					return false;
+				}
 
 				if (!ld_store_rotate_outputdb(specs,
 											  context->cur_record_lsn))
@@ -1357,6 +1519,13 @@ streamFlush(LogicalStreamContext *context)
 				  LSN_FORMAT_ARGS(context->tracking->flushed_lsn));
 	}
 
+	/* what was written is durable, and visible to apply, only once committed */
+	if (!streamCommitOutput((StreamContext *) context->private))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
 	/* at flush time also update our internal sentinel tracking */
 	if (!stream_sync_sentinel(context))
 	{
@@ -1414,11 +1583,14 @@ streamKeepalive(LogicalStreamContext *context)
 			.time = keepaliveTime
 		};
 
-		if (!ld_store_insert_internal_message(replayDB, &keepalive))
+		if (!streamBeginOutput(privateContext) ||
+			!ld_store_insert_internal_message(replayDB, &keepalive))
 		{
 			/* errors have already been logged */
 			return false;
 		}
+
+		privateContext->outputPendingMessages++;
 
 		log_trace("Inserted action KEEPALIVE for lsn %X/%X @%s",
 				  LSN_FORMAT_ARGS(keepalive.lsn),

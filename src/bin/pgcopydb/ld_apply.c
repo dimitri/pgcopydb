@@ -290,6 +290,77 @@ stream_apply_check_upstream_done(StreamSpecs *specs,
 
 
 /*
+ * stream_apply_wait_for_work is the idle wait of the apply loop: it returns
+ * when receive rings the doorbell after committing to outputDB, when receive
+ * reports it is done, or after timeoutMs, whichever comes first.
+ *
+ * The bell only means "look again": it is drained here, before the next
+ * transform pass, and receive rings it after its commit, so a row committed
+ * from now on is seen by that pass or rings again.  The poll at the top of
+ * the loop must therefore leave the doorbell alone.
+ */
+static bool
+stream_apply_wait_for_work(StreamSpecs *specs,
+						   StreamApplyContext *context,
+						   int *pipe_rd,
+						   int timeoutMs)
+{
+	int bellFd = specs->pipe_wake[0];
+
+	if (bellFd <= 0)
+	{
+		/* no doorbell (not run by follow): the lifecycle pipe, or a sleep */
+		if (*pipe_rd >= 0)
+		{
+			return stream_apply_check_upstream_done(specs, context,
+													pipe_rd, timeoutMs);
+		}
+
+		(void) pg_usleep(timeoutMs * 1000);
+		return true;
+	}
+
+	fd_set rfds;
+	FD_ZERO(&rfds);
+	FD_SET(bellFd, &rfds);
+
+	int maxFd = bellFd;
+
+	if (*pipe_rd >= 0)
+	{
+		FD_SET(*pipe_rd, &rfds);
+		maxFd = Max(maxFd, *pipe_rd);
+	}
+
+	struct timeval tv = {
+		.tv_sec = timeoutMs / 1000,
+		.tv_usec = (timeoutMs % 1000) * 1000
+	};
+
+	int nready = select(maxFd + 1, &rfds, NULL, NULL, &tv);
+
+	if (nready < 0 && errno != EINTR)
+	{
+		log_error("apply select() on pipes: %m");
+		return false;
+	}
+
+	if (nready > 0 && FD_ISSET(bellFd, &rfds))
+	{
+		char drain[64];
+
+		while (read(bellFd, drain, sizeof(drain)) > 0)
+		{
+			/* the doorbell is non-blocking, this ends when it is empty */
+		}
+	}
+
+	/* the lifecycle pipe, if it is what woke us up */
+	return stream_apply_check_upstream_done(specs, context, pipe_rd, 0);
+}
+
+
+/*
  * stream_apply_replaydb is the main catchup loop for the SQLite-based CDC
  * pipeline.  It drives a transaction-oriented outer loop:
  *
@@ -470,7 +541,13 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 				goto done;
 			}
 
-			if (specs->private.midTxnEndpos)
+			/*
+			 * A pass can hand over complete transactions and then meet the
+			 * open one that endpos falls in: apply those first, the next
+			 * pass finds the open one again with nothing before it.
+			 */
+			if (specs->private.midTxnEndpos &&
+				!stream_apply_state_progressed(&before, &current))
 			{
 				log_notice("Apply: inline transform detected mid-transaction "
 						   "endpos — endpos %X/%X fell inside an uncommitted "
@@ -676,24 +753,15 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			/*
 			 * Not caught up yet, and this pass produced no work (a pass
 			 * that did has already continued above).  This is the one
-			 * place in the loop that should actually wait: block on the
-			 * upstream-done pipe for up to 100ms, so a receive completion
-			 * is noticed promptly without busy-looping, and so idle passes
-			 * remain wall-clock bounded. With no pipe left to wait on
-			 * (catchup-only mode), fall back to a plain sleep instead.
+			 * place in the loop that should actually wait: block until
+			 * receive commits more rows or completes, for up to 100ms, so
+			 * both are noticed promptly without busy-looping, and so idle
+			 * passes remain wall-clock bounded.
 			 */
-			if (pipe_rd >= 0)
+			if (!stream_apply_wait_for_work(specs, context, &pipe_rd, 100))
 			{
-				if (!stream_apply_check_upstream_done(specs, context,
-													  &pipe_rd, 100))
-				{
-					success = false;
-					goto done;
-				}
-			}
-			else
-			{
-				pg_usleep(100 * 1000);  /* 100 ms */
+				success = false;
+				goto done;
 			}
 			continue;
 		}
@@ -955,6 +1023,41 @@ done:
 
 
 /*
+ * stream_apply_set_gucs makes sure the session settings of the apply
+ * connection are the given ones, and sends them only when they are not
+ * already.
+ *
+ * They are session level, and sent outside of a transaction block, so that no
+ * rollback takes them back: they only change when the apply moves between the
+ * regular settings and the synchronous ones around endpos.  Sending them with
+ * every transaction made six of the ten statements each one cost.
+ */
+static bool
+stream_apply_set_gucs(StreamApplyContext *context, GUC *settings)
+{
+	PGSQL *applyPgConn = &(context->applyPgConn);
+
+	if (context->appliedGucs == settings &&
+		context->appliedGucsConn != NULL &&
+		context->appliedGucsConn == applyPgConn->connection)
+	{
+		return true;
+	}
+
+	if (!pgsql_set_gucs(applyPgConn, settings))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	context->appliedGucs = settings;
+	context->appliedGucsConn = applyPgConn->connection;
+
+	return true;
+}
+
+
+/*
  * stream_apply_transaction applies a single committed transaction to the
  * target database.  It opens a Postgres transaction, iterates all DML rows
  * for xid in replay order (starting from begin_id), and commits with the
@@ -977,17 +1080,15 @@ stream_apply_transaction(StreamApplyContext *context,
 	bool sync = (context->endpos != InvalidXLogRecPtr &&
 				 context->endpos <= commitLSN);
 
-	if (!pgsql_begin(applyPgConn))
+	if (!stream_apply_set_gucs(context, sync ? applySettingsSync : applySettings))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	if (!pgsql_set_gucs(applyPgConn,
-						sync ? applySettingsSync : applySettings))
+	if (!pgsql_begin(applyPgConn))
 	{
 		/* errors have already been logged */
-		(void) pgsql_execute(applyPgConn, "ROLLBACK");
 		return false;
 	}
 
@@ -1004,6 +1105,7 @@ stream_apply_transaction(StreamApplyContext *context,
 	if (!ld_store_iter_replay_txn_init(&iter))
 	{
 		/* errors have already been logged */
+		context->appliedGucs = NULL;
 		(void) pgsql_execute(applyPgConn, "ROLLBACK");
 		context->transactionInProgress = false;
 		return false;
@@ -1084,6 +1186,7 @@ stream_apply_transaction(StreamApplyContext *context,
 				free(pr);
 			}
 
+			context->appliedGucs = NULL;
 			if (!pgsql_execute(applyPgConn, "ROLLBACK"))
 			{
 				/* errors have already been logged */
@@ -1202,6 +1305,7 @@ stream_apply_transaction(StreamApplyContext *context,
 
 	if (!success)
 	{
+		context->appliedGucs = NULL;
 		(void) pgsql_execute(applyPgConn, "ROLLBACK");
 		context->transactionInProgress = false;
 		return false;
@@ -1225,6 +1329,7 @@ stream_apply_transaction(StreamApplyContext *context,
 	{
 		log_error("Failed to setup replication origin for xid %u at %X/%X",
 				  xid, LSN_FORMAT_ARGS(commitLSN));
+		context->appliedGucs = NULL;
 		(void) pgsql_execute(applyPgConn, "ROLLBACK");
 		context->transactionInProgress = false;
 		return false;

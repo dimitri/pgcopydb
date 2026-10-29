@@ -1057,28 +1057,239 @@ fill_tuple(LogicalMessageTuple *tuple, PgoutputColContext *ctx, char section)
 
 
 /*
- * parsePgoutputMessage is the transform-step counterpart to
- * preparePgoutputMessage.  It queries pgoutput_col for the given output row
- * and builds a LogicalTransactionStatement in privateContext->stmt.
- *
- * Called from the DML dispatch switch in ld_transform.c.
+ * pgoutputColContextAdd appends one column to the context, growing its arrays
+ * when they are full.  The value is copied.
  */
-bool
-parsePgoutputMessage(StreamContext *privateContext,
-					 DatabaseCatalog *outputDB,
-					 int64_t outputId)
+static bool
+pgoutputColContextAdd(PgoutputColContext *ctx,
+					  char section,
+					  int pos,
+					  const char *name,
+					  char status,
+					  const char *value)
 {
-	LogicalTransactionStatement *stmt = privateContext->stmt;
-	LogicalMessageMetadata *metadata = &(privateContext->metadata);
-
-	sqlite3 *db = outputDB->db;
-	if (db == NULL)
+	if (ctx->colCount >= ctx->colCap)
 	{
-		log_error("BUG: parsePgoutputMessage: outputDB is NULL");
+		int cap = ctx->colCap > 0 ? ctx->colCap * 2 : 64;
+
+		ctx->sections = realloc(ctx->sections, cap * 2);
+		ctx->positions = realloc(ctx->positions, cap * sizeof(int));
+		ctx->names = realloc(ctx->names, cap * PG_NAMEDATALEN);
+		ctx->statuses = realloc(ctx->statuses, cap * 2);
+		ctx->values = realloc(ctx->values, cap * sizeof(char *));
+
+		if (!ctx->sections || !ctx->positions || !ctx->names ||
+			!ctx->statuses || !ctx->values)
+		{
+			log_error(ALLOCATION_FAILED_ERROR);
+			return false;
+		}
+
+		ctx->colCap = cap;
+	}
+
+	int i = ctx->colCount++;
+
+	ctx->sections[i][0] = section;
+	ctx->sections[i][1] = '\0';
+	ctx->positions[i] = pos;
+	strlcpy(ctx->names[i], name, PG_NAMEDATALEN);
+	ctx->statuses[i][0] = status;
+	ctx->statuses[i][1] = '\0';
+	ctx->values[i] = value != NULL ? strdup(value) : NULL;
+
+	return true;
+}
+
+
+/*
+ * pgoutputColContextFree releases what pgoutputColContextAdd allocated.
+ */
+static void
+pgoutputColContextFree(PgoutputColContext *ctx)
+{
+	for (int i = 0; i < ctx->colCount; i++)
+	{
+		free(ctx->values[i]);
+	}
+
+	free(ctx->sections);
+	free(ctx->positions);
+	free(ctx->names);
+	free(ctx->statuses);
+	free(ctx->values);
+}
+
+
+/*
+ * pgoutputEncodeColumns serializes the old and new columns of a message into
+ * one string, which is what receive stores in the message column of an output
+ * row: one row per message instead of one more per column, which cost four
+ * inserts for each row of a four column table.
+ *
+ * Each column is <section><status><length>:<name><length>:<value>, with the
+ * section 'K' or 'O' for the old tuple and 'N' for the new one, and the value
+ * part only for a status of 't': a text value, which cannot hold a NUL byte.
+ * The caller frees the result.
+ */
+char *
+pgoutputEncodeColumns(PgoutputMessage *pgmsg)
+{
+	PQExpBuffer buf = createPQExpBuffer();
+
+	if (buf == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return NULL;
+	}
+
+	for (int tuple = 0; tuple < 2; tuple++)
+	{
+		PgoutputColumn *cols = tuple == 0 ? pgmsg->old_cols : pgmsg->new_cols;
+		int count = tuple == 0 ? pgmsg->ncols_old : pgmsg->ncols_new;
+		char section = tuple == 0 ? (pgmsg->oldType == 'O' ? 'O' : 'K') : 'N';
+
+		for (int i = 0; cols != NULL && i < count; i++)
+		{
+			PgoutputColumn *col = &(cols[i]);
+
+			appendPQExpBuffer(buf, "%c%c%d:%s",
+							  section, col->status, (int) strlen(col->name),
+							  col->name);
+
+			if (col->status == 't')
+			{
+				const char *value = col->value != NULL ? col->value : "";
+
+				appendPQExpBuffer(buf, "%d:%s", (int) strlen(value), value);
+			}
+		}
+	}
+
+	char *encoded = strdup(buf->data);
+
+	destroyPQExpBuffer(buf);
+
+	return encoded;
+}
+
+
+/*
+ * pgoutputReadLength reads the "<length>:" that precedes a name or a value
+ * and moves the cursor past it.
+ */
+static bool
+pgoutputReadLength(const char **cursor, int *length)
+{
+	const char *p = *cursor;
+	int n = 0;
+
+	if (*p < '0' || *p > '9')
+	{
 		return false;
 	}
 
-	/* Read all pgoutput_col rows for this output_id */
+	while (*p >= '0' && *p <= '9')
+	{
+		n = n * 10 + (*p - '0');
+		p++;
+	}
+
+	if (*p != ':')
+	{
+		return false;
+	}
+
+	*cursor = p + 1;
+	*length = n;
+
+	return true;
+}
+
+
+/*
+ * pgoutputColumnsFromMessage reads back what pgoutputEncodeColumns wrote.
+ */
+static bool
+pgoutputColumnsFromMessage(const char *encoded, PgoutputColContext *ctx)
+{
+	const char *cursor = encoded;
+	int pos = 0;
+	char lastSection = 0;
+
+	while (*cursor != '\0')
+	{
+		char section = cursor[0];
+		char status = cursor[1];
+		int nameLength = 0;
+		int valueLength = 0;
+
+		if (section == '\0' || status == '\0')
+		{
+			return false;
+		}
+
+		cursor += 2;
+
+		if (!pgoutputReadLength(&cursor, &nameLength) ||
+			nameLength >= PG_NAMEDATALEN)
+		{
+			return false;
+		}
+
+		char name[PG_NAMEDATALEN] = { 0 };
+		strlcpy(name, cursor, nameLength + 1);
+		cursor += nameLength;
+
+		char *value = NULL;
+
+		if (status == 't')
+		{
+			if (!pgoutputReadLength(&cursor, &valueLength))
+			{
+				return false;
+			}
+
+			value = (char *) malloc(valueLength + 1);
+
+			if (value == NULL)
+			{
+				log_error(ALLOCATION_FAILED_ERROR);
+				return false;
+			}
+
+			strlcpy(value, cursor, valueLength + 1);
+			cursor += valueLength;
+		}
+
+		pos = section == lastSection ? pos + 1 : 0;
+		lastSection = section;
+
+		bool added = pgoutputColContextAdd(ctx, section, pos, name, status, value);
+
+		free(value);
+
+		if (!added)
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+
+/*
+ * pgoutputColumnsFromTable reads the columns of an output row from the
+ * pgoutput_col table, where receive put them before they went into the
+ * message column: an output.db written by an earlier version is read this
+ * way.
+ */
+static bool
+pgoutputColumnsFromTable(DatabaseCatalog *outputDB,
+						 int64_t outputId,
+						 PgoutputColContext *ctx)
+{
 	const char *sql =
 		"select section, pos, name, status, value "
 		"  from pgoutput_col "
@@ -1088,7 +1299,7 @@ parsePgoutputMessage(StreamContext *privateContext,
 	SQLiteQuery query = { 0 };
 	query.errorOnZeroRows = false;
 
-	if (!catalog_sql_prepare(db, sql, &query))
+	if (!catalog_sql_prepare_cached(outputDB, sql, &query))
 	{
 		return false;
 	}
@@ -1102,135 +1313,72 @@ parsePgoutputMessage(StreamContext *privateContext,
 		return false;
 	}
 
-	/* We don't know the count upfront, so use a dynamic array */
-	int colCap = 64;
-	int colCount = 0;
-	char (*sections)[2] = (char (*)[2])calloc(colCap, 2);
-	int *positions = (int *) calloc(colCap, sizeof(int));
-	char (*names)[PG_NAMEDATALEN] = (char (*)[PG_NAMEDATALEN])
-									calloc(colCap, PG_NAMEDATALEN);
-	char (*statuses)[2] = (char (*)[2])calloc(colCap, 2);
-	char **values = (char **) calloc(colCap, sizeof(char *));
-
-	if (!sections || !positions || !names || !statuses || !values)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		(void) catalog_sql_finalize(&query);
-		return false;
-	}
-
 	int rc;
+
 	while ((rc = catalog_sql_step(&query)) == SQLITE_ROW)
 	{
-		if (colCount >= colCap)
-		{
-			colCap *= 2;
-			sections = realloc(sections, colCap * 2);
-			positions = realloc(positions, colCap * sizeof(int));
-			names = realloc(names, colCap * PG_NAMEDATALEN);
-			statuses = realloc(statuses, colCap * 2);
-			values = realloc(values, colCap * sizeof(char *));
-			if (!sections || !positions || !names || !statuses || !values)
-			{
-				log_error(ALLOCATION_FAILED_ERROR);
-				(void) catalog_sql_finalize(&query);
-				return false;
-			}
-		}
-
 		const char *sec = (char *) sqlite3_column_text(query.ppStmt, 0);
-		sections[colCount][0] = sec ? sec[0] : 'N';
-		sections[colCount][1] = '\0';
-
-		positions[colCount] = sqlite3_column_int(query.ppStmt, 1);
-
 		const char *nm = (char *) sqlite3_column_text(query.ppStmt, 2);
-		if (nm)
-		{
-			strlcpy(names[colCount], nm, PG_NAMEDATALEN);
-		}
-
 		const char *st = (char *) sqlite3_column_text(query.ppStmt, 3);
-		statuses[colCount][0] = st ? st[0] : 't';
-		statuses[colCount][1] = '\0';
-
 		const char *val = (char *) sqlite3_column_text(query.ppStmt, 4);
-		values[colCount] = val ? strdup(val) : NULL;
 
-		colCount++;
+		if (!pgoutputColContextAdd(ctx,
+								   sec ? sec[0] : 'N',
+								   sqlite3_column_int(query.ppStmt, 1),
+								   nm ? nm : "",
+								   st ? st[0] : 't',
+								   val))
+		{
+			(void) catalog_sql_finalize(&query);
+			return false;
+		}
 	}
 
 	if (rc != SQLITE_DONE)
 	{
 		log_error("pgoutput: error iterating pgoutput_col for output_id %lld: %s",
-				  (long long) outputId, sqlite3_errmsg(db));
+				  (long long) outputId, sqlite3_errmsg(outputDB->db));
 		(void) catalog_sql_finalize(&query);
 		return false;
 	}
 
 	(void) catalog_sql_finalize(&query);
 
-	/* Build the context struct */
-	PgoutputColContext ctx = {
-		.colCount = colCount,
-		.colCap = colCap,
-		.sections = sections,
-		.positions = positions,
-		.names = names,
-		.statuses = statuses,
-		.values = values
-	};
+	return true;
+}
 
-	/* Get nspname / relname from the output row (already in metadata via
-	 * stream_transform_prepare_message reading the output table). We read
-	 * it from the calling code's ReplayDBOutputMessage but that's not
-	 * accessible here.  Instead we'll read it again directly. */
 
-	/*
-	 * Set the relation on stmt using the nspname/relname from output table.
-	 * The caller (stream_transform_prepare_message via parseMessage) already
-	 * read these from ReplayDBOutputMessage output->nspname / output->relname
-	 * and stored them in metadata through a small extension below.
-	 * For now, read them from the output row directly.
-	 */
-	const char *nspsql =
-		"select nspname, relname, old_type from output where id = $1";
+/*
+ * parsePgoutputMessage is the transform-step counterpart to
+ * preparePgoutputMessage.  It builds a LogicalTransactionStatement in
+ * privateContext->stmt from the columns of an output row, which are in its
+ * message column (columns), or in the pgoutput_col table for an output.db
+ * written before that (columns is NULL).
+ *
+ * Called from the DML dispatch switch in ld_transform.c.
+ */
+bool
+parsePgoutputMessage(StreamContext *privateContext,
+					 DatabaseCatalog *outputDB,
+					 int64_t outputId,
+					 const char *columns,
+					 const char *nspname,
+					 const char *relname,
+					 char old_type)
+{
+	LogicalTransactionStatement *stmt = privateContext->stmt;
+	LogicalMessageMetadata *metadata = &(privateContext->metadata);
 
-	SQLiteQuery nsq = { 0 };
-	nsq.errorOnZeroRows = true;
+	PgoutputColContext ctx = { 0 };
 
-	char nspname[PG_NAMEDATALEN] = { 0 };
-	char relname[PG_NAMEDATALEN] = { 0 };
-	char old_type = 0;
-
-	if (catalog_sql_prepare(db, nspsql, &nsq))
+	if (columns != NULL
+		? !pgoutputColumnsFromMessage(columns, &ctx)
+		: !pgoutputColumnsFromTable(outputDB, outputId, &ctx))
 	{
-		BindParam nsp_params[1] = {
-			{ BIND_PARAMETER_TYPE_INT64, "id", outputId, NULL }
-		};
-
-		if (catalog_sql_bind(&nsq, nsp_params, 1))
-		{
-			if (catalog_sql_step(&nsq) == SQLITE_ROW)
-			{
-				const char *ns = (char *) sqlite3_column_text(nsq.ppStmt, 0);
-				const char *rn = (char *) sqlite3_column_text(nsq.ppStmt, 1);
-				const char *ot = (char *) sqlite3_column_text(nsq.ppStmt, 2);
-				if (ns)
-				{
-					strlcpy(nspname, ns, sizeof(nspname));
-				}
-				if (rn)
-				{
-					strlcpy(relname, rn, sizeof(relname));
-				}
-				if (ot)
-				{
-					old_type = ot[0];
-				}
-			}
-		}
-		(void) catalog_sql_finalize(&nsq);
+		log_error("Failed to read the pgoutput columns of output id %lld",
+				  (long long) outputId);
+		pgoutputColContextFree(&ctx);
+		return false;
 	}
 
 	StreamAction action = (StreamAction) metadata->action;
@@ -1324,16 +1472,7 @@ parsePgoutputMessage(StreamContext *privateContext,
 		}
 	}
 
-	/* free the temporary column arrays */
-	for (int i = 0; i < colCount; i++)
-	{
-		free(values[i]);
-	}
-	free(sections);
-	free(positions);
-	free(names);
-	free(statuses);
-	free(values);
+	pgoutputColContextFree(&ctx);
 
 	return true;
 }

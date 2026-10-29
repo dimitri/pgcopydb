@@ -10,6 +10,9 @@
 #include "schema.h"
 #include "string_utils.h"
 
+/* how long to wait for a SQLite file that another process is closing */
+#define CATALOG_OPEN_BUSY_TIMEOUT_MS 5000
+
 /*
  * Column counts for batch INSERT SQL generation.  These must match the
  * parameter lists in catalog_add_s_*() exactly so that the batch functions
@@ -60,6 +63,7 @@ bool catalog_set_wal_mode(DatabaseCatalog *catalog);
 
 bool catalog_begin(DatabaseCatalog *catalog, bool immediate);
 bool catalog_commit(DatabaseCatalog *catalog);
+bool catalog_in_transaction(DatabaseCatalog *catalog);
 
 bool catalog_register_setup(DatabaseCatalog *catalog,
 							const char *source_pg_uri,

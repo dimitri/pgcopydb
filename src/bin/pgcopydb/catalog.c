@@ -620,6 +620,9 @@ static char *outputDBcreateDDLs[] = {
 	"create unique index o_a_lsn on output(action, lsn)",
 	"create index o_a_xid on output(action, xid)",
 
+	/* the next BEGIN after a given row id, see ld_store_lookup_output_after_lsn */
+	"create index o_a_id on output(action, id)",
+
 	/*
 	 * pgoutput stores structured column data here instead of a text blob.
 	 * Other plugins never touch this table.
@@ -649,9 +652,21 @@ static char *replayDBcreateDDLs[] = {
 	"  action text, xid integer, lsn integer, endlsn integer, timestamp text, "
 	"  nspname text, relname text, "
 	"  stmt_hash text references stmt(hash), stmt_args jsonb)",
+};
 
-	"create index r_xid on replay(xid)",
-	"create index r_lsn on replay(lsn)",
+/*
+ * The replay indexes are idempotent so that catalog_create_indexes() can
+ * bring a replay.db created by an earlier version up to date: the apply
+ * queries name some of them (see ld_store_replay_next_event).
+ */
+static char *replayDBcreateIndexDDLs[] = {
+	"create index if not exists r_xid on replay(xid)",
+
+	/* the next KEEPALIVE after the cursor */
+	"create index if not exists r_a_lsn on replay(action, lsn)",
+
+	/* the transactions still to apply: BEGIN rows ending after the cursor */
+	"create index if not exists r_a_endlsn on replay(action, endlsn)",
 };
 
 
@@ -1529,6 +1544,40 @@ catalog_init(DatabaseCatalog *catalog)
 		return false;
 	}
 
+	/*
+	 * The CDC spools, output.db and replay.db, hold copies of changes that
+	 * the source still has: the slot is only advanced to what apply has
+	 * committed on the target (see stream_sync_sentinel), and restarts from
+	 * there.  What an operating system crash takes from their last commits is
+	 * received again, so they can skip the fsync of every commit, which is
+	 * what synchronous = NORMAL does in WAL mode.  The files are not at risk
+	 * of corruption either way.
+	 */
+	if (catalog->type == DATABASE_CATALOG_TYPE_OUTPUT ||
+		catalog->type == DATABASE_CATALOG_TYPE_REPLAY)
+	{
+		/*
+		 * The pragmas read the schema, which fails with SQLITE_BUSY when
+		 * another process is closing the file (the last connection
+		 * checkpoints the WAL and removes it) or creating it: wait for it.
+		 */
+		sqlite3_busy_timeout(catalog->db, CATALOG_OPEN_BUSY_TIMEOUT_MS);
+
+		bool pragmasOk =
+			catalog_execute(catalog, "PRAGMA synchronous = NORMAL") &&
+			catalog_execute(catalog, "PRAGMA wal_autocheckpoint = 16384");
+
+		sqlite3_busy_timeout(catalog->db, 0);
+
+		if (!pragmasOk)
+		{
+			/* errors have already been logged */
+			sqlite3_close(catalog->db);
+			catalog->db = NULL;
+			return false;
+		}
+	}
+
 	if (createSchema)
 	{
 		/*
@@ -1788,6 +1837,12 @@ catalog_create_schema(DatabaseCatalog *catalog)
 		}
 	}
 
+	/* a replay catalog is a spool: its indexes are there before its rows */
+	if (catalog->type == DATABASE_CATALOG_TYPE_REPLAY)
+	{
+		return catalog_create_indexes(catalog);
+	}
+
 	return true;
 }
 
@@ -1796,8 +1851,9 @@ catalog_create_schema(DatabaseCatalog *catalog)
  * catalog_create_indexes builds SQLite indexes after bulk data has been
  * loaded.  Called once per catalog after the initial schema fetch completes.
  *
- * replay.db and output.db have their indexes inline in replayDBcreateDDLs /
- * outputDBcreateDDLs and are not bulk-loaded, so they are skipped here.
+ * output.db has its indexes inline in outputDBcreateDDLs and is not
+ * bulk-loaded, so it is skipped here.  replay.db gets its indexes before any
+ * row is written, and again whenever an existing file is opened.
  */
 bool
 catalog_create_indexes(DatabaseCatalog *catalog)
@@ -1829,6 +1885,12 @@ catalog_create_indexes(DatabaseCatalog *catalog)
 		}
 
 		case DATABASE_CATALOG_TYPE_REPLAY:
+		{
+			indexDDLs = replayDBcreateIndexDDLs;
+			count = sizeof(replayDBcreateIndexDDLs) / sizeof(replayDBcreateIndexDDLs[0]);
+			break;
+		}
+
 		case DATABASE_CATALOG_TYPE_OUTPUT:
 		{
 			/* indexes already created inline with tables */
@@ -2003,6 +2065,17 @@ catalog_begin(DatabaseCatalog *catalog, bool immediate)
 	}
 
 	return true;
+}
+
+
+/*
+ * catalog_in_transaction returns true when a transaction opened with
+ * catalog_begin is still open on the catalog.
+ */
+bool
+catalog_in_transaction(DatabaseCatalog *catalog)
+{
+	return catalog->db != NULL && sqlite3_get_autocommit(catalog->db) == 0;
 }
 
 
@@ -11205,6 +11278,13 @@ catalog_sql_step(SQLiteQuery *query)
 bool
 catalog_sql_finalize(SQLiteQuery *query)
 {
+	/* a cached statement stays prepared in the catalog, for the next use */
+	if (query->fromCache)
+	{
+		(void) sqlite3_reset(query->ppStmt);
+		return true;
+	}
+
 	if (sqlite3_finalize(query->ppStmt) != SQLITE_OK)
 	{
 		log_error("Failed to finalize SQLite statement: %s",

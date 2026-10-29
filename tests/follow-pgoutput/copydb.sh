@@ -71,19 +71,12 @@ if [ -n "$outdb" ] && [ -f "$outdb" ]; then
     "select id, action, xid, lsn, nspname, relname from output limit 10;"
 
   #
-  # Validate that the pgoutput_col table exists and has rows.
-  #
-  col_rows=$(sqlite3 -init /dev/null -noheader -list "$outdb" \
-    "select count(*) from pgoutput_col;")
-  echo "pgoutput_col rows: ${col_rows}"
-  test "${col_rows}" -gt 0
-
-  #
-  # Validate that DML rows have nspname/relname set and NULL message.
+  # Validate that DML rows have nspname/relname set and their columns in the
+  # message column.
   #
   null_msg=$(sqlite3 -init /dev/null -noheader -list "$outdb" \
-    "select count(*) from output where action in ('I','U','D','T') and message is not null;")
-  echo "DML rows with non-NULL message (should be 0): ${null_msg}"
+    "select count(*) from output where action in ('I','U','D') and message is null;")
+  echo "I/U/D rows with a NULL message (should be 0): ${null_msg}"
   test "${null_msg}" -eq 0
 
   nspname_set=$(sqlite3 -init /dev/null -noheader -list "$outdb" \

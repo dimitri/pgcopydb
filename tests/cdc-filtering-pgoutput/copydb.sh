@@ -69,20 +69,12 @@ OUTPUTDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-output.db' -type f | head -1)
 sqlite3 ${OUTPUTDB} "select count(*) as output_rows from output;"
 
 #
-# Validate that pgoutput_col has rows (pgoutput binary protocol is used).
-#
-col_rows=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
-  "select count(*) from pgoutput_col;")
-echo "pgoutput_col rows: ${col_rows}"
-test "${col_rows}" -gt 0
-
-#
-# Validate that DML rows have NULL message (pgoutput stores structured data,
-# not text blobs).
+# Validate that I/U/D rows have their columns in the message column (pgoutput
+# binary protocol is used).
 #
 null_msg=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
-  "select count(*) from output where action in ('I','U','D','T') and message is not null;")
-echo "DML rows with non-NULL message (should be 0): ${null_msg}"
+  "select count(*) from output where action in ('I','U','D') and message is null;")
+echo "I/U/D rows with a NULL message (should be 0): ${null_msg}"
 test "${null_msg}" -eq 0
 
 #
