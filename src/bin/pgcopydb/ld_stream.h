@@ -527,6 +527,27 @@ typedef struct StreamContext
 	uint64_t transformedCommitLSN;
 
 	/*
+	 * The transaction at the head of outputDB that receive has not reached
+	 * the COMMIT of yet, as found by ld_store_iter_output: pendingXid is 0
+	 * when there is none.
+	 */
+	uint32_t pendingXid;
+	int64_t pendingBeginId;
+
+	/*
+	 * The transaction the transform has started on before its COMMIT is in
+	 * outputDB (see stream_transform_open_transaction): it is transformed in
+	 * pieces as receive commits them, and openLastId is the last output row
+	 * it has consumed, so that the pass that finds the COMMIT continues from
+	 * there.  openReplayBeginId is the id of its BEGIN row in replayDB, which
+	 * has no end LSN until the COMMIT, and so cannot be applied before.
+	 */
+	uint32_t openXid;
+	int64_t openBeginId;
+	int64_t openLastId;
+	int64_t openReplayBeginId;
+
+	/*
 	 * Cursor over the KEEPALIVE and SWITCH rows of outputDB, set by
 	 * stream_transform_from_outputdb from the apply's own marker cursor.
 	 */

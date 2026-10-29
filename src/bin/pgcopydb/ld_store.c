@@ -2250,6 +2250,13 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 	iter->keepalive_lsn = specs->private.keepaliveLSN;
 	iter->endpos = specs->endpos;
 
+	/* a transaction that an earlier pass has started on continues */
+	iter->resume_begin_id = specs->private.openBeginId;
+	iter->resume_after_id = specs->private.openLastId;
+
+	specs->private.pendingXid = 0;
+	specs->private.pendingBeginId = 0;
+
 
 	if (!ld_store_iter_output_init(iter))
 	{
@@ -2266,6 +2273,9 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 	{
 		if (iter->pending_xid != 0)
 		{
+			specs->private.pendingXid = iter->pending_xid;
+			specs->private.pendingBeginId = iter->pending_begin_id;
+
 			/*
 			 * A BEGIN for xid N is in the output table but its COMMIT has
 			 * not been written yet.  Decide whether to wait or exit cleanly:
@@ -2425,6 +2435,128 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 
 
 /*
+ * ld_store_replay_set_endlsn sets the end LSN of a BEGIN row of the replay
+ * table: the transaction can then be applied.
+ */
+bool
+ld_store_replay_set_endlsn(DatabaseCatalog *catalog, int64_t id, uint64_t endlsn)
+{
+	char *sql = "update replay set endlsn = $1 where id = $2";
+
+	SQLiteQuery query = { 0 };
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "endlsn", endlsn, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "id", id, NULL }
+	};
+
+	return catalog_sql_prepare_cached(catalog, sql, &query) &&
+		   catalog_sql_bind(&query, params, 2) &&
+		   catalog_sql_execute_once(&query);
+}
+
+
+/*
+ * ld_store_replay_drop_open removes from the replay table a transaction that
+ * the transform wrote part of and never completed (its BEGIN row has no end
+ * LSN), and everything after it, which is part of it.
+ */
+bool
+ld_store_replay_drop_open(DatabaseCatalog *catalog)
+{
+	char *sql =
+		"delete from replay "
+		" where id >= (select min(id) from replay "
+		"               where action = 'B' and endlsn is null)";
+
+	SQLiteQuery query = { 0 };
+
+	return catalog_sql_prepare_cached(catalog, sql, &query) &&
+		   catalog_sql_execute_once(&query);
+}
+
+
+/*
+ * ld_store_iter_output_open calls the callback for the rows of the open
+ * transaction (specs->private.openXid) that the output table holds after
+ * the last one consumed, in insertion order, and keeps openLastId up to
+ * date.  The transaction has no COMMIT row yet: it is what receive has
+ * committed of it so far.
+ */
+bool
+ld_store_iter_output_open(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
+{
+	StreamContext *privateContext = &(specs->private);
+
+	ReplayDBOutputMessage output = { 0 };
+
+	ReplayDBOutputIterator iter = {
+		.catalog = specs->outputDB,
+		.output = &output
+	};
+
+	char *sql =
+		"   select id, action, xid, lsn, timestamp, message, nspname, relname, old_type "
+		"     from output "
+		"    where xid = $1 and id > $2 "
+		" order by id";
+
+	SQLiteQuery *query = &(iter.query);
+
+	query->context = &output;
+	query->fetchFunction = &ld_store_output_fetch;
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "xid", privateContext->openXid, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "afterId", privateContext->openLastId, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_prepare_cached(iter.catalog, sql, query) ||
+		!catalog_sql_bind(query, params, count))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	for (;;)
+	{
+		if (!ld_store_iter_output_next(&iter))
+		{
+			/* errors have already been logged */
+			(void) ld_store_iter_output_finish(&iter);
+			return false;
+		}
+
+		if (iter.output == NULL)
+		{
+			break;
+		}
+
+		bool stop = false;
+
+		privateContext->openLastId = output.id;
+
+		if (!(*callback)(specs, &output, &stop))
+		{
+			log_error("Failed to iterate over CDC output messages, "
+					  "see above for details");
+			(void) ld_store_iter_output_finish(&iter);
+			return false;
+		}
+
+		if (stop)
+		{
+			break;
+		}
+	}
+
+	return ld_store_iter_output_finish(&iter);
+}
+
+
+/*
  * ld_store_iter_output_init initializes an Iterator over our SQLite replayDB
  * output messages.
  */
@@ -2531,6 +2663,7 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 						  LSN_FORMAT_ARGS(first.lsn));
 
 				iter->pending_xid = first.xid;
+				iter->pending_begin_id = first.id;
 				iter->output = NULL;
 				return true;
 			}
@@ -2676,6 +2809,19 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 	 */
 	uint64_t endId = last.id > iter->output->id ? last.id : INT64_MAX;
 
+	/*
+	 * A transaction the transform has started on (see
+	 * stream_transform_open_transaction) continues from the row after the
+	 * last one it consumed, when it is the same BEGIN: receive can replace it.
+	 */
+	uint64_t fromId = iter->output->id;
+
+	if (iter->resume_after_id > 0 &&
+		iter->resume_begin_id == iter->output->id)
+	{
+		fromId = iter->resume_after_id + 1;
+	}
+
 	char *sql =
 		"   select id, action, xid, lsn, timestamp, message, nspname, relname, old_type "
 		"     from output "
@@ -2690,7 +2836,7 @@ ld_store_iter_output_init(ReplayDBOutputIterator *iter)
 
 	BindParam params[] = {
 		{ BIND_PARAMETER_TYPE_INT64, "xid", first.xid, NULL },
-		{ BIND_PARAMETER_TYPE_INT64, "id", iter->output->id, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "id", fromId, NULL },
 		{ BIND_PARAMETER_TYPE_INT64, "endId", endId, NULL }
 	};
 
