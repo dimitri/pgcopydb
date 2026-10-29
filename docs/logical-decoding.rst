@@ -95,23 +95,22 @@ streaming resumes from the greater of the client's requested start position and
 ``confirmed_flush_lsn``, so whatever the client last reported as flushed
 becomes the effective replay starting point.
 
-pgcopydb reports ``sentinel.transform_lsn`` as the flush LSN.
-``transform_lsn`` advances only at committed transaction boundaries — to
-``COMMIT.end_lsn``, the byte immediately after a completed COMMIT record,
-which is identical to ``first_lsn`` of the next transaction.  Advancing to any
-position inside an uncommitted transaction (past a BEGIN but before its COMMIT)
-would cause the slot to skip that transaction on reconnect, silently losing
-data.  Because ``confirmed_flush_lsn`` after processing transaction N equals
-``end_lsn_N = first_lsn_{N+1}``, streaming on reconnect resumes exactly at the
-first byte of the next unprocessed transaction, the ``>=`` predicate on BEGIN
-rows in the restart cursor matches it at exactly that LSN, and no message is
-lost or replayed twice.
+pgcopydb reports as the flush LSN the position up to which receive has
+committed and synced messages to ``output.db``, not what the apply process
+has committed on the target. The source can then recycle the WAL as soon as
+it is safe in the local spool, which matters during the initial copy of the
+data, when apply does not run and may not for hours: reporting what apply has
+committed would keep on the source all the WAL written since the slot was
+created, and, for a database that has no transaction to apply, would keep it
+for as long as the migration lasts.
 
-pgcopydb also records ``pipeline_state.last_xid`` alongside
-``transform_lsn``.  The pair ``(transform_lsn, last_xid)`` forms a complete
-restart descriptor — the last fully processed transaction was XID X whose
-COMMIT ended at LSN L.  Only ``transform_lsn`` drives the PostgreSQL slot
-position; ``last_xid`` is kept for debugging and cross-process assertions.
+The position may fall inside a transaction whose messages are only partly
+spooled. That is safe: the server sends again, from its BEGIN, every
+transaction whose COMMIT comes after ``confirmed_flush_lsn``, and the unique
+index on ``(action, lsn)`` of the output table absorbs the messages that were
+already there (``INSERT OR REPLACE``). A transaction whose COMMIT is before it
+has been spooled completely, since the position never goes past what was
+committed to ``output.db``.
 
 A separate watermark, ``sentinel.replay_lsn``, tracks progress on the target
 side: it records the LSN of the last transaction successfully committed to the
@@ -176,12 +175,12 @@ Internal model for endpos tracking
 
 pgcopydb tracks two separate concerns:
 
-PostgreSQL-facing LSN (``transform_lsn``, ``flush_lsn``)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+PostgreSQL-facing LSN (``flush_lsn``)
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Only advances at committed transaction boundaries.  This is the value reported
-to PostgreSQL as ``confirmed_flush_lsn``.  It must never be set to a position
-inside an uncommitted transaction.
+Advances to the last position receive has committed and synced to
+``output.db``. This is the value reported to PostgreSQL as
+``confirmed_flush_lsn``. It never goes past what is in the spool.
 
 Internal endpos-reached signal
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
