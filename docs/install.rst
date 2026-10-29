@@ -88,8 +88,10 @@ packages as Postgres itself:
       build-essential \
       autotools-dev \
       flex \
+      bison \
       libedit-dev \
       libgc-dev \
+      libnuma-dev \
       libpam0g-dev \
       libreadline-dev \
       libselinux1-dev \

@@ -10,6 +10,7 @@ RUN apt-get update \
         bison \
         libedit-dev \
         libgc-dev \
+        libnuma-dev \
         libpam0g-dev \
         libreadline-dev \
         libselinux1-dev \
