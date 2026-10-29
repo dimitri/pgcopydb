@@ -35,6 +35,18 @@ pgcopydb clone --split-tables-larger-than 200kB
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
+# the target stamps the rows it inserts, which the source does not
+psql -d ${PGCOPYDB_TARGET_PGURI} <<'EOS'
+create function full_identity_stamp() returns trigger language plpgsql
+as $$ begin new.stamp := 'target'; return new; end $$;
+
+create trigger full_identity_stamp
+ before insert on full_identity_test
+ for each row execute function full_identity_stamp();
+
+alter table full_identity_test enable always trigger full_identity_stamp;
+EOS
+
 # now that the copying is done, inject some SQL DML changes to the source
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/special-dml.sql
@@ -91,8 +103,8 @@ test "${k_n_cols}" -eq 6
 #
 # Validate REPLICA IDENTITY FULL DELETE (O-section) with genuine NULL:
 #   For the 'address' DELETE, pgoutput sends an 'O' tuple where address2 is
-#   genuinely NULL (status='n'). That column must appear in the WHERE clause
-#   as "address2 IS NULL".
+#   genuinely NULL (status='n'). That column is stored as such, though the
+#   WHERE clause only has the primary key (see stmt.sql).
 #
 o_null_cols=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
   "select count(*) from output
@@ -156,6 +168,14 @@ tgt_count=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select count(*) from actor
 
 echo "source actor count: ${src_count}, target actor count: ${tgt_count}"
 test "${src_count}" -eq "${tgt_count}"
+
+#
+# REPLICA IDENTITY FULL and a target that differs from the source: the rows
+# are located by primary key, so the UPDATE and the DELETE are applied.
+#
+full_identity=`psql -AtqX -d ${PGCOPYDB_TARGET_PGURI} -c "select string_agg(id || val || stamp, ',' order by id) from full_identity_test"`
+echo "full_identity_test on the target: ${full_identity}"
+test "${full_identity}" = "1Atarget,2btarget"
 
 #
 # Multi-row DELETE batching validation (issue #828).

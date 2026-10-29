@@ -67,3 +67,15 @@ create table if not exists multi_column_table
 );
 alter table multi_column_table replica identity full;
 commit;
+
+-- REPLICA IDENTITY FULL on a table with a primary key: UPDATE and DELETE locate
+-- the row by its key, even when the target differs from the source elsewhere
+begin;
+create table if not exists full_identity_test
+(
+   id bigint primary key,
+   val text,
+   stamp text
+);
+alter table full_identity_test replica identity full;
+commit;

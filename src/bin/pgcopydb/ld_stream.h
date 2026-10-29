@@ -121,6 +121,7 @@ typedef struct LogicalMessageAttribute
 
 	bool isgenerated;        /* GENERATED ALWAYS AS (expr) stored column */
 	bool isidentityalways;   /* GENERATED ALWAYS AS IDENTITY column */
+	bool iskey;              /* primary key column, locates the row */
 } LogicalMessageAttribute;
 
 typedef struct LogicalMessageAttributeArray
@@ -359,6 +360,31 @@ typedef struct TestDecodingAttrCache
 
 
 /*
+ * KeyColumnsCache lists the primary key columns of a table, looked up in the
+ * source catalog the first time an UPDATE or DELETE targets the table. The
+ * table is keyed by its name as the statements spell it, "nspname"."relname".
+ * A table without a primary key has an empty list.
+ */
+typedef struct KeyColumn
+{
+	char attname[PG_NAMEDATALEN];
+
+	UT_hash_handle hh;           /* hashable by attname */
+} KeyColumn;
+
+
+typedef struct KeyColumnsCache
+{
+	char qname[4 * PG_NAMEDATALEN + 4];
+
+	int count;
+	KeyColumn *columns;
+
+	UT_hash_handle hh;           /* hashable by qname */
+} KeyColumnsCache;
+
+
+/*
  * TestDecodingTableCache caches the SourceTable + per-attribute lookups for
  * each table seen by the test_decoding parser. Without it, every UPDATE
  * message (for tables that lack an old-key section, i.e. REPLICA IDENTITY
@@ -431,6 +457,9 @@ typedef struct StreamContext
 
 	/* per-table cache for the test_decoding parser hot path */
 	TestDecodingTableCache *testDecodingTableCache;
+
+	/* primary key columns of the tables UPDATE and DELETE target */
+	KeyColumnsCache *keyColumnsCache;
 
 	/* relation cache for pgoutput binary protocol */
 	PgoutputRelationCache *pgoutputRelationCache;
