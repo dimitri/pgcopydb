@@ -6,11 +6,15 @@
 --             belong to non-excluded tables (e.g. a partitioned parent,
 --             relkind='p', absent from s_table) into filtersDB.  Pass '{}'
 --             when no subtraction is needed.
+-- $4::bool  : true for the filtersDB complement queries (LIST_NOT_INCL and
+--             LIST_EXCL), where $1 lists excluded tables rather than
+--             selected ones.
 WITH
  filters AS (
      SELECT $1::oid[] AS table_oids,
             $2::oid[] AS namespace_oids,
-            $3::oid[] AS keep_table_oids
+            $3::oid[] AS keep_table_oids,
+            $4::bool AS is_filters_db
  ),
  seqs AS (
     SELECT s.oid AS seqoid,
@@ -89,6 +93,25 @@ SELECT s.seqoid,
      -- sequence owned via OWNED BY relationship
   OR (r1.oid IS NOT NULL
       AND (f.table_oids IS NULL OR r1.oid = ANY(f.table_oids)))
+
+     -- identity sequence owned by a partitioned parent (relkind 'p'): the
+     -- parent is never in table_oids, so follow its partitions at any depth.
+     -- Skipped for filtersDB complement queries, where table_oids lists
+     -- excluded tables.
+  OR (r1.relkind = 'p'
+      AND NOT f.is_filters_db
+      AND EXISTS (
+          WITH RECURSIVE partitions(relid) AS (
+              SELECT inhrelid FROM pg_inherits WHERE inhparent = r1.oid
+              UNION ALL
+              SELECT i.inhrelid
+                FROM pg_inherits i
+                JOIN partitions p ON i.inhparent = p.relid
+          )
+          SELECT 1
+            FROM partitions
+            JOIN unnest(f.table_oids) AS t(oid) ON t.oid = partitions.relid
+      ))
 
      -- sequence used as column DEFAULT (no table filter: include if any attrdef exists)
   OR (r2.oid IS NOT NULL AND f.table_oids IS NULL)

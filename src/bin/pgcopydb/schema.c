@@ -933,10 +933,12 @@ schema_list_ordinary_tables(PGSQL *pgsql,
  * schema_list_sequences grabs the list of sequences from the given source
  * Postgres instance and stores the result in the SQLite catalog.
  *
- * Uses list_source_sequences.sql with two parameters:
+ * Uses list_source_sequences.sql with four parameters:
  *   $1::oid[] = table OIDs from catalog's s_table (NULL = no table filter)
  *   $2::oid[] = namespace OIDs from catalog's s_namespace (NULL = no ns filter;
  *               '{}'::oid[] = exclude standalone sequences, used for filtersDB)
+ *   $3::oid[] = keep table OIDs (LIST_EXCL subtraction, '{}' when unused)
+ *   $4::bool  = true for filtersDB complement queries
  *
  * For sourceDB queries the namespace OIDs restrict standalone sequences to
  * included schemas.  For filtersDB complement queries an empty array is passed
@@ -1031,9 +1033,11 @@ schema_list_sequences(PGSQL *pgsql,
 		return false;
 	}
 
-	int paramCount = 3;
-	Oid paramTypes[3] = { TEXTOID, TEXTOID, TEXTOID };
-	const char *paramValues[3] = { table_oids, ns_oids, keep_table_oids };
+	int paramCount = 4;
+	Oid paramTypes[4] = { TEXTOID, TEXTOID, TEXTOID, TEXTOID };
+	const char *paramValues[4] = {
+		table_oids, ns_oids, keep_table_oids, isFiltersDB ? "true" : "false"
+	};
 
 	if (!pgsql_execute_with_params(pgsql, sql,
 								   paramCount, paramTypes, paramValues,
