@@ -2265,8 +2265,35 @@ ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback)
 	}
 
 
-	if (iter->output != NULL)
-	{ }
+	/*
+	 * The transaction found complete is not the one the transform has started
+	 * on: receive went back to the server for it and replaced it. What the
+	 * transform wrote of the earlier copy would be written again with this
+	 * one, so it goes, and what apply sent of it to the target with it.
+	 */
+	if (iter->output != NULL &&
+		iter->output->action == STREAM_ACTION_BEGIN &&
+		specs->private.openXid != 0 &&
+		specs->private.openBeginId != (int64_t) iter->output->id)
+	{
+		bool dropped = false;
+
+		if (!ld_store_replay_drop_open(specs->replayDB, &dropped))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (dropped)
+		{
+			specs->private.openGeneration++;
+		}
+
+		specs->private.openXid = 0;
+		specs->private.openBeginId = 0;
+		specs->private.openLastId = 0;
+		specs->private.openReplayBeginId = 0;
+	}
 
 	if (iter->output == NULL ||
 		iter->output->action == STREAM_ACTION_UNKNOWN)
@@ -2462,7 +2489,7 @@ ld_store_replay_set_endlsn(DatabaseCatalog *catalog, int64_t id, uint64_t endlsn
  * LSN), and everything after it, which is part of it.
  */
 bool
-ld_store_replay_drop_open(DatabaseCatalog *catalog)
+ld_store_replay_drop_open(DatabaseCatalog *catalog, bool *dropped)
 {
 	char *sql =
 		"delete from replay "
@@ -2471,8 +2498,66 @@ ld_store_replay_drop_open(DatabaseCatalog *catalog)
 
 	SQLiteQuery query = { 0 };
 
-	return catalog_sql_prepare_cached(catalog, sql, &query) &&
-		   catalog_sql_execute_once(&query);
+	if (!catalog_sql_prepare_cached(catalog, sql, &query) ||
+		!catalog_sql_execute_once(&query))
+	{
+		return false;
+	}
+
+	*dropped = sqlite3_changes(catalog->db) > 0;
+
+	return true;
+}
+
+
+static bool
+ld_store_fetch_count(SQLiteQuery *query)
+{
+	int64_t *count = (int64_t *) query->context;
+
+	*count = sqlite3_column_int64(query->ppStmt, 0);
+
+	return true;
+}
+
+
+/*
+ * ld_store_replay_txn_is_complete sets complete when the replay table has the
+ * BEGIN row of that id and transaction, and it has an end LSN: the transform
+ * has written the transaction, up to its COMMIT row.
+ */
+bool
+ld_store_replay_txn_is_complete(DatabaseCatalog *catalog,
+								uint64_t id,
+								uint32_t xid,
+								bool *complete)
+{
+	char *sql =
+		"select count(*) from replay "
+		" where id = $1 and action = 'B' and xid = $2 and endlsn is not null";
+
+	int64_t count = 0;
+
+	SQLiteQuery query = {
+		.context = &count,
+		.fetchFunction = &ld_store_fetch_count
+	};
+
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "id", id, NULL },
+		{ BIND_PARAMETER_TYPE_INT64, "xid", xid, NULL }
+	};
+
+	if (!catalog_sql_prepare_cached(catalog, sql, &query) ||
+		!catalog_sql_bind(&query, params, 2) ||
+		!catalog_sql_execute_once(&query))
+	{
+		return false;
+	}
+
+	*complete = count > 0;
+
+	return true;
 }
 
 

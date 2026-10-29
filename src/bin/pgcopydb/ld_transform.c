@@ -234,6 +234,33 @@ stream_transform_from_outputdb(StreamSpecs *specs,
 	uint64_t startLSN = previousLSN;
 	bool success = true;
 
+	/*
+	 * A transaction that an earlier process transformed part of and never
+	 * completed is still in replayDB, its BEGIN row without an end LSN. It is
+	 * of no use to this one, which transforms it again from the start, and
+	 * would be taken for the open transaction of this process (and everything
+	 * after it dropped along with it): clear it before writing anything.
+	 */
+	if (specs->private.staleOpenDroppedFrom != replayDB)
+	{
+		bool dropped = false;
+
+		if (!ld_store_replay_drop_open(replayDB, &dropped))
+		{
+			/* errors have already been logged */
+			(void) catalog_execute(replayDB, "ROLLBACK");
+			(void) catalog_commit(outputDB);
+			return false;
+		}
+
+		if (dropped)
+		{
+			specs->private.openGeneration++;
+		}
+
+		specs->private.staleOpenDroppedFrom = replayDB;
+	}
+
 	for (int count = 0; count < STREAM_TRANSFORM_BATCH_MAX_TXNS; count++)
 	{
 		/* tell ld_store_iter_output where to start (last transformed commit) */
@@ -283,6 +310,7 @@ stream_transform_from_outputdb(StreamSpecs *specs,
 		specs->private.currentMsg = empty;
 		specs->private.openXid = 0;
 		specs->private.openReplayBeginId = 0;
+		specs->private.openGeneration++;
 	}
 
 	/* the caller's cursor is what it was: it advances as it applies */
@@ -2400,10 +2428,17 @@ stream_transform_open_transaction(StreamSpecs *specs)
 
 		privateContext->currentMsg = empty;
 
-		if (!ld_store_replay_drop_open(specs->replayDB))
+		bool dropped = false;
+
+		if (!ld_store_replay_drop_open(specs->replayDB, &dropped))
 		{
 			/* errors have already been logged */
 			return false;
+		}
+
+		if (dropped)
+		{
+			privateContext->openGeneration++;
 		}
 
 		privateContext->openXid = privateContext->pendingXid;

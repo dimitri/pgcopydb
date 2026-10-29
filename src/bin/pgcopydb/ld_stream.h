@@ -548,6 +548,16 @@ typedef struct StreamContext
 	int64_t openReplayBeginId;
 
 	/*
+	 * Counts the times the rows of an open transaction were taken back out of
+	 * replayDB, for the apply process to know that what it sent of one to the
+	 * target is not what replayDB holds of it anymore.
+	 */
+	uint32_t openGeneration;
+
+	/* the replayDB whose open rows from an earlier process were dropped */
+	DatabaseCatalog *staleOpenDroppedFrom;
+
+	/*
 	 * Cursor over the KEEPALIVE and SWITCH rows of outputDB, set by
 	 * stream_transform_from_outputdb from the apply's own marker cursor.
 	 */
@@ -652,6 +662,22 @@ typedef struct StreamApplyContext
 	bool endPosRecordSeen;      /* saw a record at or past endpos */
 	bool reachedEOF;
 	bool transactionInProgress;
+
+	/*
+	 * A transaction can be sent to the target before its COMMIT has reached
+	 * replayDB (see stream_apply_open_transaction): openTxn is set while one
+	 * is open on the target, with its BEGIN row in replayDB, the last row sent
+	 * and the generation of the transform's open transaction it was taken
+	 * from. The state of the transaction on the target is kept with it.
+	 */
+	bool openTxn;
+	uint32_t openTxnXid;
+	uint64_t openTxnBeginId;
+	uint64_t openTxnLastId;
+	uint32_t openTxnGeneration;
+	TargetRelkind *txnSentRefresh;
+	bool txnContainsMessage;
+
 	bool logSQL;
 
 	PreparedStmt *preparedStmt;

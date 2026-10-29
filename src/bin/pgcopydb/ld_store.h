@@ -121,8 +121,10 @@ typedef bool (ReplayDBOutputIterFun)(StreamSpecs *specs,
 
 bool ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback);
 bool ld_store_replay_set_endlsn(DatabaseCatalog *catalog, int64_t id,
-								 uint64_t endlsn);
-bool ld_store_replay_drop_open(DatabaseCatalog *catalog);
+								uint64_t endlsn);
+bool ld_store_replay_drop_open(DatabaseCatalog *catalog, bool *dropped);
+bool ld_store_replay_txn_is_complete(DatabaseCatalog *catalog, uint64_t id,
+									 uint32_t xid, bool *complete);
 bool ld_store_iter_output_open(StreamSpecs *specs,
 							   ReplayDBOutputIterFun *callback);
 
