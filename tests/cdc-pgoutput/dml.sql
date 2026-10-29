@@ -123,3 +123,17 @@ commit;
 begin;
 delete from multi_delete_composite_test;
 commit;
+
+--
+-- full_identity_test: the target stamps the rows it inserts, so the old row
+-- of an UPDATE or DELETE (the whole row, with a NULL stamp) is not the row
+-- found on the target.
+--
+begin;
+insert into full_identity_test (id, val) values (1, 'a'), (2, 'b'), (3, 'c');
+commit;
+
+begin;
+update full_identity_test set val = 'A' where id = 1;
+delete from full_identity_test where id = 3;
+commit;

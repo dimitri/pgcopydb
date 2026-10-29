@@ -51,6 +51,9 @@ static bool markGeneratedColumnsFromTransaction(GeneratedColumnsCache *cache,
 static bool markGeneratedColumnsFromStatement(GeneratedColumnsCache *cache,
 											  LogicalTransactionStatement *stmt);
 
+static bool stream_transform_locate_by_key(StreamContext *privateContext,
+										   LogicalTransactionStatement *stmt);
+
 static bool prepareGeneratedColumnsCache_hook(void *ctx, SourceTable *table);
 
 static bool prepareGeneratedColumnsCache(StreamSpecs *specs);
@@ -452,6 +455,12 @@ stream_transform_prepare_message(StreamSpecs *specs,
 				log_error("pgoutput DML received outside of transaction");
 				return false;
 			}
+			if (!stream_transform_locate_by_key(privateContext, pgstmt))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
 			(void) streamLogicalTransactionAppendStatement(
 				&(mesg->command.tx), pgstmt);
 		}
@@ -1685,6 +1694,12 @@ parseMessage(StreamContext *privateContext, char *message, JSON_Value *json)
 				}
 			}
 
+			if (!stream_transform_locate_by_key(privateContext, stmt))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
 			(void) streamLogicalTransactionAppendStatement(txn, stmt);
 
 			break;
@@ -2540,6 +2555,21 @@ stream_write_update(bool replayNoOpUpdates,
 
 		appendPQExpBufferStr(buf, " WHERE ");
 
+		/*
+		 * With REPLICA IDENTITY FULL the old tuple is the whole row, and the
+		 * row is located by its primary key alone when the table has one, as
+		 * native logical replication and pglogical do: the target may differ
+		 * from the source in other columns.
+		 */
+		bool keyOnly = false;
+
+		for (int oc = 0; oc < old->attributes.count; oc++)
+		{
+			keyOnly = keyOnly || old->attributes.array[oc].iskey;
+		}
+
+		int whereCount = 0;
+
 		for (int r = 0; r < old->values.count; r++)
 		{
 			LogicalMessageValues *values = &(old->values.array[r]);
@@ -2560,6 +2590,11 @@ stream_write_update(bool replayNoOpUpdates,
 					return false;
 				}
 
+				if (keyOnly && !attr->iskey)
+				{
+					continue;
+				}
+
 				if (value->isNull)
 				{
 					/*
@@ -2567,13 +2602,13 @@ stream_write_update(bool replayNoOpUpdates,
 					 * instead of `=` in the WHERE clause.
 					 */
 					appendPQExpBuffer(buf, "%s%s IS NULL",
-									  v > 0 ? " and " : "",
+									  whereCount++ > 0 ? " and " : "",
 									  attr->attname);
 				}
 				else
 				{
 					appendPQExpBuffer(buf, "%s%s = $%d",
-									  v > 0 ? " and " : "",
+									  whereCount++ > 0 ? " and " : "",
 									  attr->attname,
 									  ++pos);
 
@@ -3123,6 +3158,253 @@ lookupGeneratedColumnsForTable(GeneratedColumnsCache *cache,
 	log_trace("Table \"%s.%s\" has generated columns", nspname, relname);
 
 	return item->columns;
+}
+
+
+/*
+ * unquoteIdentifier copies an identifier to dst without the double quotes
+ * around it, and with the double quotes inside it undoubled.
+ */
+static void
+unquoteIdentifier(const char *src, char *dst, size_t size)
+{
+	size_t len = strlen(src);
+
+	if (len < 2 || src[0] != '"' || src[len - 1] != '"')
+	{
+		strlcpy(dst, src, size);
+		return;
+	}
+
+	size_t pos = 0;
+
+	for (size_t i = 1; i < len - 1 && pos < size - 1; i++)
+	{
+		if (src[i] == '"' && src[i + 1] == '"')
+		{
+			++i;
+		}
+
+		dst[pos++] = src[i];
+	}
+
+	dst[pos] = '\0';
+}
+
+
+/*
+ * lookupKeyColumns returns the primary key columns of a table, from the
+ * cache or else from the source catalog, where the lookup is done once per
+ * table. The names are the ones used in the statements, quoted or not.
+ */
+static KeyColumnsCache *
+lookupKeyColumns(StreamContext *privateContext,
+				 const char *nspname,
+				 const char *relname)
+{
+	char qname[4 * PG_NAMEDATALEN + 4] = { 0 };
+
+	sformat(qname, sizeof(qname), "%s.%s", nspname, relname);
+
+	KeyColumnsCache *item = NULL;
+
+	HASH_FIND_STR(privateContext->keyColumnsCache, qname, item);
+
+	if (item != NULL)
+	{
+		return item;
+	}
+
+	item = (KeyColumnsCache *) calloc(1, sizeof(KeyColumnsCache));
+
+	if (item == NULL)
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		return NULL;
+	}
+
+	strlcpy(item->qname, qname, sizeof(item->qname));
+
+	DatabaseCatalog *sourceDB = privateContext->sourceDB;
+
+	if (sourceDB != NULL)
+	{
+		char nsp[PG_NAMEDATALEN] = { 0 };
+		char rel[PG_NAMEDATALEN] = { 0 };
+
+		unquoteIdentifier(nspname, nsp, sizeof(nsp));
+		unquoteIdentifier(relname, rel, sizeof(rel));
+
+		SourceTable table = { 0 };
+
+		if (!catalog_lookup_s_table_by_name(sourceDB, nsp, rel, &table))
+		{
+			/* errors have already been logged */
+			free(item);
+			return NULL;
+		}
+
+		/* a table that is not in our catalog has no key to use */
+		if (table.oid != 0)
+		{
+			if (!catalog_s_table_fetch_attrs(sourceDB, &table))
+			{
+				log_error("Failed to fetch table %s attribute list", table.qname);
+				free(item);
+				return NULL;
+			}
+
+			for (int i = 0; i < table.attributes.count; i++)
+			{
+				SourceTableAttribute *attr = &(table.attributes.array[i]);
+
+				if (!attr->attisprimary)
+				{
+					continue;
+				}
+
+				KeyColumn *key = (KeyColumn *) calloc(1, sizeof(KeyColumn));
+
+				if (key == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					free(item);
+					return NULL;
+				}
+
+				strlcpy(key->attname, attr->attname, sizeof(key->attname));
+				HASH_ADD_STR(item->columns, attname, key);
+				++item->count;
+			}
+		}
+	}
+
+	HASH_ADD_STR(privateContext->keyColumnsCache, qname, item);
+
+	return item;
+}
+
+
+/*
+ * isKeyColumn returns true when attname, as a statement spells it, is one of
+ * the key columns.
+ */
+static bool
+isKeyColumn(KeyColumnsCache *keys, const char *attname)
+{
+	char name[PG_NAMEDATALEN] = { 0 };
+
+	unquoteIdentifier(attname, name, sizeof(name));
+
+	KeyColumn *key = NULL;
+
+	HASH_FIND_STR(keys->columns, name, key);
+
+	return key != NULL;
+}
+
+
+/*
+ * stream_transform_locate_by_key makes an UPDATE or a DELETE that comes with
+ * the whole old row (REPLICA IDENTITY FULL) locate its row by primary key, as
+ * native logical replication and pglogical do. Matching every column of the
+ * old row finds nothing as soon as the target differs from the source in a
+ * column, such as one a trigger sets, and the change is then silently lost.
+ *
+ * An UPDATE keeps the whole old row, which the SET clause is built from, and
+ * has its key columns marked. A DELETE keeps its key columns only, before the
+ * statement can be coalesced with the ones that come next. A table without a
+ * primary key keeps the whole old row, and so does a tuple that does not hold
+ * every key column.
+ */
+static bool
+stream_transform_locate_by_key(StreamContext *privateContext,
+							   LogicalTransactionStatement *stmt)
+{
+	LogicalMessageRelation *table = NULL;
+	LogicalMessageTupleArray *olds = NULL;
+
+	if (stmt->action == STREAM_ACTION_UPDATE)
+	{
+		table = &(stmt->stmt.update.table);
+		olds = &(stmt->stmt.update.old);
+	}
+	else if (stmt->action == STREAM_ACTION_DELETE)
+	{
+		table = &(stmt->stmt.delete.table);
+		olds = &(stmt->stmt.delete.old);
+	}
+	else
+	{
+		return true;
+	}
+
+	KeyColumnsCache *keys =
+		lookupKeyColumns(privateContext, table->nspname, table->relname);
+
+	if (keys == NULL)
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	if (keys->count == 0)
+	{
+		return true;
+	}
+
+	for (int t = 0; t < olds->count; t++)
+	{
+		LogicalMessageTuple *old = &(olds->array[t]);
+
+		int found = 0;
+
+		for (int c = 0; c < old->attributes.count; c++)
+		{
+			if (isKeyColumn(keys, old->attributes.array[c].attname))
+			{
+				++found;
+			}
+		}
+
+		/* the old row is already the key, or does not have all of it */
+		if (found != keys->count || found == old->attributes.count)
+		{
+			continue;
+		}
+
+		if (stmt->action == STREAM_ACTION_UPDATE)
+		{
+			for (int c = 0; c < old->attributes.count; c++)
+			{
+				LogicalMessageAttribute *attr = &(old->attributes.array[c]);
+
+				attr->iskey = isKeyColumn(keys, attr->attname);
+			}
+
+			continue;
+		}
+
+		LogicalMessageValues *values = &(old->values.array[0]);
+		int kept = 0;
+
+		for (int c = 0; c < old->attributes.count; c++)
+		{
+			if (!isKeyColumn(keys, old->attributes.array[c].attname))
+			{
+				continue;
+			}
+
+			old->attributes.array[kept] = old->attributes.array[c];
+			values->array[kept] = values->array[c];
+			++kept;
+		}
+
+		old->attributes.count = kept;
+		values->cols = kept;
+	}
+
+	return true;
 }
 
 
