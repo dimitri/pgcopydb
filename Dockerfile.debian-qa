@@ -12,8 +12,11 @@ RUN apt-get update \
         devscripts \
         debhelper \
         autotools-dev \
+        flex \
+        bison \
         libgc-dev \
         libedit-dev \
+        libnuma-dev \
         libpam0g-dev \
         libreadline-dev \
         libselinux1-dev \

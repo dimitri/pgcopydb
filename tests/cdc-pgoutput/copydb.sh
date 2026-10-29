@@ -35,6 +35,15 @@ pgcopydb clone --split-tables-larger-than 200kB
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
+# where the replication slot starts, to see it move when apply has not run
+slot_start=`psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "select confirmed_flush_lsn from pg_replication_slots where slot_name = 'pgcopydb'"`
+
+# In a clone --follow the apply process runs from the start, waits for the
+# permission to apply, and publishes the origin progress as sentinel.replay_lsn:
+# do the same here, to be where the initial copy of the data puts the sentinel.
+SOURCEDB=`find /tmp /var/lib/postgres -name source.db -path '*schema*' 2>/dev/null | head -1`
+sqlite3 "${SOURCEDB}" "update sentinel set replay_lsn = startpos where id = 1"
+
 # the target stamps the rows it inserts, which the source does not
 psql -d ${PGCOPYDB_TARGET_PGURI} <<'EOS'
 create function full_identity_stamp() returns trigger language plpgsql
@@ -137,6 +146,15 @@ fi
 # Run prefetch again — should be a no-op (idempotent).
 #
 pgcopydb stream prefetch --resume --endpos "${lsn}" -vv
+
+#
+# The source may forget the WAL once receive has it safe in the output table,
+# before the apply process has done anything: that is what lets a long initial
+# copy run without the WAL piling up on the source.
+#
+slot_flushed=`psql -AtqX -d ${PGCOPYDB_SOURCE_PGURI} -c "select confirmed_flush_lsn > '${slot_start}'::pg_lsn from pg_replication_slots where slot_name = 'pgcopydb'"`
+echo "slot confirmed_flush_lsn moved past ${slot_start} with receive alone: ${slot_flushed}"
+test "${slot_flushed}" = "t"
 
 #
 # Allow the apply process and apply the CDC changes to the target.

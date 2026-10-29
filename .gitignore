@@ -47,3 +47,10 @@ lib*.pc
 ci/Dockerfile.docs
 src/bin/pgcopydb/cscope.out
 src/bin/pgcopydb/catalog.h.uncrustify
+
+# generated from archive_toc_lexer.l by flex, see src/bin/pgcopydb/Makefile
+src/bin/pgcopydb/archive_toc_lexer.c
+
+# generated from archive_toc_grammar.y by bison, see src/bin/pgcopydb/Makefile
+src/bin/pgcopydb/archive_toc_grammar.c
+src/bin/pgcopydb/archive_toc_grammar.h

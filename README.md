@@ -89,15 +89,14 @@ $ pgcopydb help
     constraints  Create all the constraints found in the source database in the target
 
   pgcopydb dump
-    schema     Dump source database schema as custom files in work directory
-    roles      Dump source database roles as custom file in work directory
+    schema  Dump source database schema as custom files in work directory
+    roles   Dump source database roles as custom file in work directory
 
   pgcopydb restore
-    schema      Restore a database schema from custom files to target database
-    pre-data    Restore a database pre-data schema from custom file to target database
-    post-data   Restore a database post-data schema from custom file to target database
-    roles       Restore database roles from SQL file to target database
-    parse-list  Parse pg_restore --list output from custom file
+    schema     Restore a database schema from custom files to target database
+    pre-data   Restore a database pre-data schema from custom file to target database
+    post-data  Restore a database post-data schema from custom file to target database
+    roles      Restore database roles from SQL file to target database
 
   pgcopydb list
     databases    List databases
@@ -110,22 +109,24 @@ $ pgcopydb help
     depends      List all the dependencies to filter-out
     schema       List the schema to migrate, formatted in JSON
     progress     List the progress
+    toc          List and filter a pg_dump archive's Table of Contents
 
   pgcopydb stream
-    setup     Setup source and target systems for logical decoding
-    cleanup   Cleanup source and target systems for logical decoding
-    prune     Remove already-applied CDC files from disk to reclaim disk space
-    prefetch  Stream changes from the source database into the SQLite CDC store
-    catchup   Transform and apply prefetched changes from the SQLite CDC store to the target
-    replay    Replay changes from the source to the target database, live
-  + sentinel  Maintain a sentinel table
-    receive   Stream changes from the source database
-    apply     Apply changes from the replayDB to the target database, or stdout
+    setup          Setup source and target systems for logical decoding
+    cleanup        Cleanup source and target systems for logical decoding
+    prune          Remove already-applied CDC files from disk to reclaim disk space
+    event-trigger  Install the event trigger that emits DDL as logical decoding messages
+    prefetch       Stream changes from the source database into the SQLite CDC store
+    catchup        Transform and apply prefetched changes from the SQLite CDC store to the target
+    replay         Replay changes from the source to the target database, live
+  + sentinel       Maintain a sentinel table
+    receive        Stream changes from the source database
+    apply          Apply changes from the replayDB to the target database, or stdout
 
   pgcopydb stream sentinel
-    setup   Setup the sentinel table
-    get     Get the sentinel table values
-  + set     Set the sentinel table values
+    setup  Setup the sentinel table
+    get    Get the sentinel table values
+  + set    Set the sentinel table values
 
   pgcopydb stream sentinel set
     startpos  Set the sentinel start position LSN

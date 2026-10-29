@@ -33,14 +33,13 @@
    
      pgcopydb dump
        schema  Dump source database schema as custom files in work directory
-       roles   Dump source database roles as custome file in work directory
+       roles   Dump source database roles as custom file in work directory
    
      pgcopydb restore
-       schema      Restore a database schema from custom files to target database
-       pre-data    Restore a database pre-data schema from custom file to target database
-       post-data   Restore a database post-data schema from custom file to target database
-       roles       Restore database roles from SQL file to target database
-       parse-list  Parse pg_restore --list output from custom file
+       schema     Restore a database schema from custom files to target database
+       pre-data   Restore a database pre-data schema from custom file to target database
+       post-data  Restore a database post-data schema from custom file to target database
+       roles      Restore database roles from SQL file to target database
    
      pgcopydb list
        databases    List databases
@@ -53,6 +52,7 @@
        depends      List all the dependencies to filter-out
        schema       List the schema to migrate, formatted in JSON
        progress     List the progress
+       toc          List and filter a pg_dump archive's Table of Contents
    
      pgcopydb stream
        setup          Setup source and target systems for logical decoding

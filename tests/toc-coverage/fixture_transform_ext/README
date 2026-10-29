@@ -1,0 +1,27 @@
+tests/toc-coverage/fixture_transform_ext/
+================================================
+
+A minimal, do-nothing C extension whose only purpose is to make a real
+`CREATE TRANSFORM` possible when capturing tests/toc-coverage/fixture.sql's
+output.
+
+Why this exists: a TRANSFORM's FROM SQL/TO SQL functions must take or
+return the pseudo-type `internal`, which only a C-language function may
+use (PostgreSQL rejects any other language for them) -- there is no way
+to create one with plain SQL/plpgsql alone. The two functions below do
+nothing useful; they only exist to satisfy that signature requirement.
+
+Not needed to build or run pgcopydb itself -- only to regenerate
+fixture.dump/expected-pg-restore-list.txt from fixture.sql against a real
+Postgres server. To do so:
+
+    cd tests/toc-coverage/fixture_transform_ext
+    make
+    sudo make install        # or: run as the same user as the target
+                              # Postgres server's own binaries
+    psql -d <fixture database> -c 'create extension fixture_transform;'
+
+then run the `CREATE TRANSFORM` statement from fixture.sql as usual (it's
+a plain SQL statement, not part of the extension itself, so the TRANSFORM
+it creates is dumped as its own standalone object, not hidden as an
+extension member).
