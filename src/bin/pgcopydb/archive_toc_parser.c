@@ -29,6 +29,16 @@
  * (archive_toc_lex_line/archive_toc_parse never touch item->desc
  * themselves until a production actually matches), so that one
  * warning path covers both a malformed line and an unrecognized one.
+ *
+ * This is a deliberate, long-standing project policy, not something
+ * new here: see https://github.com/dimitri/pgcopydb/issues/123, where
+ * the original hand-rolled parser already chose WARN over ERROR for
+ * exactly this reason -- "there is no impact at all in the behavior of
+ * pgcopydb (hence WARN, not ERROR), but it's enough of a problem that
+ * someone might want to report it, giving me a chance to go ahead and
+ * fix the parser." This rewrite generalizes that same policy from one
+ * specific case (an ACL/COMMENT entry the old parser couldn't split)
+ * to every shape this grammar doesn't yet structure.
  */
 bool
 archive_toc_parse_line(const char *line, ArchiveContentItem *item)

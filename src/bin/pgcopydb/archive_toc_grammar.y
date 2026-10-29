@@ -36,10 +36,7 @@
 int archive_toc_lex(void);
 void archive_toc_error(ArchiveContentItem *item, const char *msg);
 
-static char *archiveTocJoinWords(char *acc, char *word);
-static char *archiveTocConcat(char *acc, char *piece);
-static char *archiveTocWrapParen(char *inner);
-static char *archiveTocAppendArg(char *accText, char *arg);
+static char *archiveTocWrapParen(PQExpBuffer inner);
 static void archiveTocBuildSimpleNames(ArchiveContentItem *item,
 										const char *name, const char *owner);
 static void archiveTocBuildRelationNames(ArchiveContentItem *item,
@@ -50,7 +47,8 @@ static void archiveTocBuildOpaqueNames(ArchiveContentItem *item,
 										const char *rlNamespace,
 										const char *body,
 										const char *owner);
-static void archiveTocSetOperatorArg(bool *hasArg, char **arg, char *text);
+static void archiveTocSetOperatorArg(bool *hasArg, char **arg,
+									  PQExpBuffer text);
 static char *archiveTocSlice(const char *start, const char *end);
 static void archiveTocBuildUseListRemainder(ArchiveContentItem *item,
 											 const char *bodyStart,
@@ -76,15 +74,23 @@ static void archiveTocOverrideRestoreListName(ArchiveContentItem *item,
 /*
  * A function/procedure/aggregate's own balanced-parentheses argument
  * list, built up one comma-separated typename at a time: items/count
- * hand off directly to item->signature.args/argsCount, text is the
- * full verbatim reconstruction for item->signature.argsText.
+ * hand off directly to item->signature.args/argsCount, text accumulates
+ * the full verbatim reconstruction for item->signature.argsText.
+ *
+ * text is a PQExpBuffer, not a char *, for the same O(n^2) reason
+ * wordname/typename thread one below: with N arguments, a plain char *
+ * rebuilt via strdup+free on every single comma copies the whole
+ * growing string again each time. The entry actions that consume a
+ * finished ArchiveArgList (TOP_FUNCLIKE, NESTED_FUNCLIKE) finalize
+ * text->data into item->signature.argsText's own malloc'ed char * and
+ * destroy the buffer there.
  */
 typedef struct ArchiveArgList
 {
 	char **items;
 	int count;
 	int cap;        /* allocated size of items[], see archiveTocArgListAppend */
-	char *text;
+	PQExpBuffer text;
 } ArchiveArgList;
 
 /*
@@ -123,9 +129,11 @@ static void archiveTocArgListAppend(ArchiveArgList *list, char *item);
 
 	struct
 	{
-		char *text;
+		PQExpBuffer buf;
 		const char *end;
 	} span;
+
+	PQExpBuffer buf;
 
 	ArchiveArgList arglist;
 }
@@ -160,8 +168,9 @@ static void archiveTocArgListAppend(ArchiveArgList *list, char *item);
 %token <tag> NESTED_OPCLASS_FAMILY
 %token <pos> '(' ')' ',' '.'
 
-%type <str> nspname typename paren_group paren_inner
-%type <str> paren_inner_item owner castSourceType castTargetType
+%type <str> nspname paren_group
+%type <str> paren_inner_item owner
+%type <buf> typename paren_inner castSourceType castTargetType
 %type <word> objname
 %type <arglist> arglist args
 %type <pos> mark relname_item relname name
@@ -267,16 +276,31 @@ mark:
  * fixture.sql's "Fixture Weird Fn") with no further internal structure
  * -- unlike typename below, it never attaches a parenthesized group of
  * its own.
+ *
+ * $$.buf is the SAME PQExpBuffer threaded through every alternative
+ * that extends an existing wordname, appended to directly rather than
+ * rebuilt into a brand new, one-byte-longer allocation each time (what
+ * the removed archiveTocJoinWords/archiveTocConcat helpers used to do):
+ * PQExpBuffer's own amortized-doubling growth makes this whole
+ * production O(n) in the total text length instead of O(n^2) in the
+ * word count, the same reason arglist's own archiveTocArgListAppend
+ * grows its array 10 slots at a time rather than realloc()ing once per
+ * argument.
  */
 wordname:
 	WORD
 		{
-			$$.text = $1.text;
+			$$.buf = createPQExpBuffer();
+			appendPQExpBufferStr($$.buf, $1.text);
+			free($1.text);
 			$$.end = $1.end;
 		}
 	| wordname SPACE WORD
 		{
-			$$.text = archiveTocJoinWords($1.text, $3.text);
+			$$ = $1;
+			appendPQExpBufferChar($$.buf, ' ');
+			appendPQExpBufferStr($$.buf, $3.text);
+			free($3.text);
 			$$.end = $3.end;
 		}
 	| wordname '.' WORD
@@ -290,8 +314,10 @@ wordname:
 			 * typename's own '.' rule means. Glued directly, no
 			 * space, same as typename's.
 			 */
-			char *dotted = archiveTocConcat(strdup("."), $3.text);
-			$$.text = archiveTocConcat($1.text, dotted);
+			$$ = $1;
+			appendPQExpBufferChar($$.buf, '.');
+			appendPQExpBufferStr($$.buf, $3.text);
+			free($3.text);
 			$$.end = $3.end;
 		}
 	;
@@ -351,20 +377,40 @@ name:
 /*
  * typename is wordname's counterpart for an actual Postgres type-name
  * expression (a CAST's source/target, a TRANSFORM's own type, one
- * function argument's type): same multi-word accumulation, plus a
- * directly-attached (no separating space) parenthesized group for a
- * type's own typmod, e.g. "numeric(10,2)" -- recognized by ordinary
- * grammar recursion (paren_group below), not a hand-counted depth
- * variable.
+ * function argument's type): same multi-word accumulation (see
+ * wordname's own comment on why $$ threads one PQExpBuffer through
+ * every alternative instead of rebuilding a new allocation each time),
+ * plus a directly-attached (no separating space) parenthesized group
+ * for a type's own typmod, e.g. "numeric(10,2)" -- recognized by
+ * ordinary grammar recursion (paren_group below), not a hand-counted
+ * depth variable.
  */
 typename:
-	WORD                            { $$ = $1.text; }
-	| typename SPACE WORD        { $$ = archiveTocJoinWords($1, $3.text); }
-	| typename paren_group               { $$ = archiveTocConcat($1, $2); }
+	WORD
+		{
+			$$ = createPQExpBuffer();
+			appendPQExpBufferStr($$, $1.text);
+			free($1.text);
+		}
+	| typename SPACE WORD
+		{
+			$$ = $1;
+			appendPQExpBufferChar($$, ' ');
+			appendPQExpBufferStr($$, $3.text);
+			free($3.text);
+		}
+	| typename paren_group
+		{
+			$$ = $1;
+			appendPQExpBufferStr($$, $2);
+			free($2);
+		}
 	| typename '.' WORD
 		{
-			char *dotted = archiveTocConcat(strdup("."), $3.text);
-			$$ = archiveTocConcat($1, dotted);
+			$$ = $1;
+			appendPQExpBufferChar($$, '.');
+			appendPQExpBufferStr($$, $3.text);
+			free($3.text);
 		}
 	;
 
@@ -372,9 +418,21 @@ paren_group:
 	'(' paren_inner ')'    { $$ = archiveTocWrapParen($2); }
 	;
 
+/*
+ * paren_inner reconstructs whatever sits between one balanced pair of
+ * parentheses verbatim, the same "accumulate into one threaded
+ * PQExpBuffer, not a fresh allocation per item" idea as wordname/
+ * typename above -- a typmod rarely has more than a couple of items,
+ * but there is no reason for this one to be the odd one out.
+ */
 paren_inner:
-	/* empty */                          { $$ = strdup(""); }
-	| paren_inner paren_inner_item        { $$ = archiveTocConcat($1, $2); }
+	/* empty */                          { $$ = createPQExpBuffer(); }
+	| paren_inner paren_inner_item
+		{
+			$$ = $1;
+			appendPQExpBufferStr($$, $2);
+			free($2);
+		}
 	;
 
 paren_inner_item:
@@ -399,7 +457,7 @@ arglist:
 			$$.items = NULL;
 			$$.count = 0;
 			$$.cap = 0;
-			$$.text = strdup("");
+			$$.text = createPQExpBuffer();
 		}
 	| args                               { $$ = $1; }
 	;
@@ -407,17 +465,26 @@ arglist:
 args:
 	typename
 		{
+			char *arg = strdup($1->data);
+			destroyPQExpBuffer($1);
+
 			$$.items = NULL;
 			$$.count = 0;
 			$$.cap = 0;
-			archiveTocArgListAppend(&$$, $1);
-			$$.text = strdup($1);
+			archiveTocArgListAppend(&$$, arg);
+
+			$$.text = createPQExpBuffer();
+			appendPQExpBufferStr($$.text, arg);
 		}
 	| args ',' SPACE typename
 		{
+			char *arg = strdup($4->data);
+			destroyPQExpBuffer($4);
+
 			$$ = $1;
-			archiveTocArgListAppend(&$$, $4);
-			$$.text = archiveTocAppendArg($$.text, $4);
+			archiveTocArgListAppend(&$$, arg);
+			appendPQExpBufferStr($$.text, ", ");
+			appendPQExpBufferStr($$.text, arg);
 		}
 	;
 
@@ -577,7 +644,8 @@ entry:
 				item->signature.argsCount = $6.count;
 			}
 
-			item->signature.argsText = $6.text;
+			item->signature.argsText = strdup($6.text->data);
+			destroyPQExpBuffer($6.text);
 
 			/*
 			 * item->name stays narrowed to the bare function name
@@ -587,10 +655,10 @@ entry:
 			 * behavior, overridden here since archiveTocBuildSimpleNames
 			 * would otherwise build it from the already-narrowed name.
 			 */
-			archiveTocBuildSimpleNames(item, $4.text, $9);
+			archiveTocBuildSimpleNames(item, $4.buf->data, $9);
 			archiveTocOverrideRestoreListName(item, $3, $8, $9);
 
-			free($4.text);
+			destroyPQExpBuffer($4.buf);
 			free($9);
 		}
 
@@ -632,15 +700,15 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			item->cast.sourceType = strdup($6);
-			item->cast.targetType = strdup($8);
+			item->cast.sourceType = strdup($6->data);
+			item->cast.targetType = strdup($8->data);
 
 			char *body = archiveTocSlice($3, $10);
 			archiveTocBuildSimpleNames(item, body, $11);
 			free(body);
 
-			free($6);
-			free($8);
+			destroyPQExpBuffer($6);
+			destroyPQExpBuffer($8);
 			free($11);
 		}
 
@@ -656,7 +724,7 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			item->transform.type = strdup($6);
+			item->transform.type = strdup($6->data);
 			strlcpy(item->transform.language, $8.text,
 					sizeof(item->transform.language));
 
@@ -664,7 +732,7 @@ entry:
 			archiveTocBuildSimpleNames(item, body, $10);
 			free(body);
 
-			free($6);
+			destroyPQExpBuffer($6);
 			free($8.text);
 			free($10);
 		}
@@ -707,7 +775,7 @@ entry:
 				strlcpy(item->nspname, $2, sizeof(item->nspname));
 			}
 
-			strlcpy(item->defaultAclObjectType, $6.text,
+			strlcpy(item->defaultAclObjectType, $6.buf->data,
 					sizeof(item->defaultAclObjectType));
 
 			/*
@@ -728,7 +796,7 @@ entry:
 			archiveTocBuildSimpleNames(item, body, $7);
 			free(body);
 
-			free($6.text);
+			destroyPQExpBuffer($6.buf);
 			free($7);
 		}
 	;
@@ -825,7 +893,8 @@ nested_entry:
 				item->signature.argsCount = $5.count;
 			}
 
-			item->signature.argsText = $5.text;
+			item->signature.argsText = strdup($5.text->data);
+			destroyPQExpBuffer($5.text);
 
 			archiveTocBuildSimpleNames(item, $3.text, $8);
 			archiveTocBuildUseListRemainder(item, $2, $7, $8);
@@ -856,8 +925,8 @@ nested_entry:
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			item->cast.sourceType = strdup($4);
-			item->cast.targetType = strdup($6);
+			item->cast.sourceType = strdup($4->data);
+			item->cast.targetType = strdup($6->data);
 
 			char *body = archiveTocSlice($2, $8);
 			archiveTocBuildOpaqueNames(item, item->hasNamespace ? item->nspname : "-",
@@ -865,8 +934,8 @@ nested_entry:
 			archiveTocBuildUseListRemainder(item, $2, $8, $9);
 			free(body);
 
-			free($4);
-			free($6);
+			destroyPQExpBuffer($4);
+			destroyPQExpBuffer($6);
 			free($9);
 		}
 
@@ -888,7 +957,7 @@ nested_entry:
 			item->objectType = $1.desc;
 			item->objectTypeText = $1.text;
 
-			item->transform.type = strdup($3);
+			item->transform.type = strdup($3->data);
 			strlcpy(item->transform.language, $5.text,
 					sizeof(item->transform.language));
 
@@ -898,7 +967,7 @@ nested_entry:
 			archiveTocBuildUseListRemainder(item, $2, $6, $7);
 			free(body);
 
-			free($3);
+			destroyPQExpBuffer($3);
 			free($5.text);
 			free($7);
 		}
@@ -1032,114 +1101,33 @@ archiveTocSlice(const char *start, const char *end)
 
 
 /*
- * archiveTocJoinWords appends `word` to `acc` (NULL for the first word)
- * with exactly one space between them -- pg_dump's own convention for
- * every multi-word name or type expression this format can contain --
- * freeing both inputs and returning a freshly malloc'ed result, the
- * single-ownership chain every nonterminal built up this way relies on.
- */
-static char *
-archiveTocJoinWords(char *acc, char *word)
-{
-	if (acc == NULL)
-	{
-		return word;
-	}
-
-	size_t bytes = strlen(acc) + 1 + strlen(word) + 1;
-	char *out = (char *) malloc(bytes);
-
-	if (out == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		free(acc);
-		free(word);
-		return NULL;
-	}
-
-	sformat(out, bytes, "%s %s", acc, word);
-	free(acc);
-	free(word);
-
-	return out;
-}
-
-
-/*
- * archiveTocConcat is archiveTocJoinWords without the inserted space --
- * for attaching a parenthesized group directly after a type name (no
- * space before "(" in e.g. "numeric(10,2)"), and for paren_inner's own
- * verbatim reconstruction of whatever sits between a balanced pair.
- */
-static char *
-archiveTocConcat(char *acc, char *piece)
-{
-	size_t bytes = strlen(acc) + strlen(piece) + 1;
-	char *out = (char *) malloc(bytes);
-
-	if (out == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		free(acc);
-		free(piece);
-		return NULL;
-	}
-
-	sformat(out, bytes, "%s%s", acc, piece);
-	free(acc);
-	free(piece);
-
-	return out;
-}
-
-
-/*
  * archiveTocWrapParen wraps `inner` (already reconstructed verbatim by
- * paren_inner) in its own literal parentheses, freeing it.
+ * paren_inner, as a PQExpBuffer -- see that nonterminal's own comment)
+ * in its own literal parentheses, destroying it, and returns a freshly
+ * malloc'ed flat copy: every nonterminal above passes plain char*
+ * between productions, so this is where a threaded PQExpBuffer's
+ * lifetime ends and ordinary single-ownership malloc'ed text resumes.
  */
 static char *
-archiveTocWrapParen(char *inner)
+archiveTocWrapParen(PQExpBuffer inner)
 {
-	size_t bytes = strlen(inner) + 3;
-	char *out = (char *) malloc(bytes);
+	PQExpBuffer buf = createPQExpBuffer();
 
-	if (out == NULL)
+	appendPQExpBufferChar(buf, '(');
+	appendPQExpBufferStr(buf, inner->data);
+	appendPQExpBufferChar(buf, ')');
+	destroyPQExpBuffer(inner);
+
+	if (PQExpBufferBroken(buf))
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
-		free(inner);
+		destroyPQExpBuffer(buf);
 		return NULL;
 	}
 
-	sformat(out, bytes, "(%s)", inner);
-	free(inner);
+	char *out = strdup(buf->data);
 
-	return out;
-}
-
-
-/*
- * archiveTocAppendArg extends an argument list's own verbatim
- * reconstruction (item->signature.argsText) with one more ", "-separated
- * argument -- `arg` is NOT freed here (unlike archiveTocConcat/
- * archiveTocJoinWords's inputs): it is also stored directly into the
- * arglist's own items[] array by the args rule that calls this, so it
- * outlives this one string.
- */
-static char *
-archiveTocAppendArg(char *accText, char *arg)
-{
-	size_t bytes = strlen(accText) + 2 + strlen(arg) + 1;
-	char *out = (char *) malloc(bytes);
-
-	if (out == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		free(accText);
-		return NULL;
-	}
-
-	sformat(out, bytes, "%s, %s", accText, arg);
-	free(accText);
+	destroyPQExpBuffer(buf);
 
 	return out;
 }
@@ -1186,6 +1174,36 @@ archiveTocArgListAppend(ArchiveArgList *list, char *item)
  * FAMILY's own remainder, or anything else this grammar doesn't
  * structure further).
  */
+/*
+ * archiveTocFormatThree builds "a b c" (the fixed "nspname/rlNamespace
+ * body owner" shape every one of item->restoreListName's own variants
+ * below needs) into a freshly malloc'ed string, via PQExpBuffer rather
+ * than each caller hand-computing its own byte count: the actual
+ * separator convention (single space, three fields) only needs to be
+ * right in one place this way.
+ */
+static char *
+archiveTocFormatThree(const char *a, const char *b, const char *c)
+{
+	PQExpBuffer buf = createPQExpBuffer();
+
+	appendPQExpBuffer(buf, "%s %s %s", a, b, c);
+
+	if (PQExpBufferBroken(buf))
+	{
+		log_error(ALLOCATION_FAILED_ERROR);
+		destroyPQExpBuffer(buf);
+		return NULL;
+	}
+
+	char *out = strdup(buf->data);
+
+	destroyPQExpBuffer(buf);
+
+	return out;
+}
+
+
 static void
 archiveTocBuildSimpleNames(ArchiveContentItem *item, const char *name,
 						   const char *owner)
@@ -1195,17 +1213,8 @@ archiveTocBuildSimpleNames(ArchiveContentItem *item, const char *name,
 	item->tagType = ARCHIVE_TAG_TYPE_OTHER;
 
 	const char *nspname = item->hasNamespace ? item->nspname : "-";
-	size_t bytes = strlen(nspname) + 1 + strlen(name) + 1 + strlen(owner) + 1;
 
-	item->restoreListName = (char *) calloc(bytes, sizeof(char));
-
-	if (item->restoreListName == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-		return;
-	}
-
-	sformat(item->restoreListName, bytes, "%s %s %s", nspname, name, owner);
+	item->restoreListName = archiveTocFormatThree(nspname, name, owner);
 }
 
 
@@ -1219,20 +1228,8 @@ archiveTocBuildRelationNames(ArchiveContentItem *item, const char *relname,
 	item->tagType = ARCHIVE_TAG_TYPE_OTHER;
 
 	const char *nspname = item->hasNamespace ? item->nspname : "-";
-	size_t bytes = strlen(nspname) + 1 + strlen(relname) + 1 +
-				   strlen(owner) + 1;
 
-	item->restoreListName = (char *) calloc(bytes, sizeof(char));
-
-	if (item->restoreListName == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-	}
-	else
-	{
-		sformat(item->restoreListName, bytes, "%s %s %s",
-				nspname, relname, owner);
-	}
+	item->restoreListName = archiveTocFormatThree(nspname, relname, owner);
 }
 
 
@@ -1244,20 +1241,7 @@ archiveTocBuildOpaqueNames(ArchiveContentItem *item, const char *rlNamespace,
 	strlcpy(item->owner, owner, sizeof(item->owner));
 	item->tagType = ARCHIVE_TAG_TYPE_OTHER;
 
-	size_t bytes = strlen(rlNamespace) + 1 + strlen(body) + 1 +
-				   strlen(owner) + 1;
-
-	item->restoreListName = (char *) calloc(bytes, sizeof(char));
-
-	if (item->restoreListName == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-	}
-	else
-	{
-		sformat(item->restoreListName, bytes, "%s %s %s",
-				rlNamespace, body, owner);
-	}
+	item->restoreListName = archiveTocFormatThree(rlNamespace, body, owner);
 }
 
 
@@ -1287,22 +1271,22 @@ archiveTocBuildUseListRemainder(ArchiveContentItem *item,
 		return;
 	}
 
-	size_t bytes = strlen(rlNamespace) + 1 + strlen(item->objectTypeText) +
-				   1 + strlen(body) + 1 + strlen(owner) + 1;
+	PQExpBuffer buf = createPQExpBuffer();
 
-	item->useListRemainder = (char *) calloc(bytes, sizeof(char));
+	appendPQExpBuffer(buf, "%s %s %s %s",
+					   rlNamespace, item->objectTypeText, body, owner);
+	free(body);
 
-	if (item->useListRemainder == NULL)
+	if (PQExpBufferBroken(buf))
 	{
 		log_error(ALLOCATION_FAILED_ERROR);
 	}
 	else
 	{
-		sformat(item->useListRemainder, bytes, "%s %s %s %s",
-				rlNamespace, item->objectTypeText, body, owner);
+		item->useListRemainder = strdup(buf->data);
 	}
 
-	free(body);
+	destroyPQExpBuffer(buf);
 }
 
 
@@ -1336,18 +1320,7 @@ archiveTocOverrideRestoreListName(ArchiveContentItem *item,
 		return;
 	}
 
-	size_t bytes = strlen(nspname) + 1 + strlen(body) + 1 + strlen(owner) + 1;
-
-	item->restoreListName = (char *) calloc(bytes, sizeof(char));
-
-	if (item->restoreListName == NULL)
-	{
-		log_error(ALLOCATION_FAILED_ERROR);
-	}
-	else
-	{
-		sformat(item->restoreListName, bytes, "%s %s %s", nspname, body, owner);
-	}
+	item->restoreListName = archiveTocFormatThree(nspname, body, owner);
 
 	free(body);
 }
@@ -1356,22 +1329,16 @@ archiveTocOverrideRestoreListName(ArchiveContentItem *item,
 /*
  * archiveTocSetOperatorArg sets one side of an OPERATOR's own operand
  * types (item->operatorArgs' own leftArg/rightArg) from its already-
- * reconstructed typename text, "NONE" literally (dumpOpr's own text for a prefix or
- * postfix operator missing that side, pg_dump.c) meaning absent rather
- * than a real type name.
+ * reconstructed typename buffer, "NONE" literally (dumpOpr's own text
+ * for a prefix or postfix operator missing that side, pg_dump.c)
+ * meaning absent rather than a real type name. Always destroys `text`:
+ * this is where typename's own threaded PQExpBuffer lifetime ends.
  */
 static void
-archiveTocSetOperatorArg(bool *hasArg, char **arg, char *text)
+archiveTocSetOperatorArg(bool *hasArg, char **arg, PQExpBuffer text)
 {
-	*hasArg = !streq(text, "NONE");
+	*hasArg = !streq(text->data, "NONE");
+	*arg = *hasArg ? strdup(text->data) : NULL;
 
-	if (*hasArg)
-	{
-		*arg = text;
-	}
-	else
-	{
-		free(text);
-		*arg = NULL;
-	}
+	destroyPQExpBuffer(text);
 }

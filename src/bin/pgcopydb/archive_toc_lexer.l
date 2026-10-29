@@ -123,6 +123,19 @@ static void archive_toc_ident_append(const char *s, int len);
 static char archive_toc_word[BUFSIZE];
 
 /*
+ * archive_toc_expect_domain and archive_toc_expect_transform_kw gate the
+ * two context-sensitive reclassifications archive_toc_word_or_keyword_
+ * token performs -- see that function's own comment. Declared here,
+ * ahead of the rule section below that sets/reads them, rather than
+ * alongside archive_toc_tag_token further down (past the first %%):
+ * the rules themselves run inside archive_toc_lex(), generated from
+ * the section ABOVE that %%, so a declaration placed after it, like
+ * archive_toc_nested_mode's own, would not be visible there yet.
+ */
+static bool archive_toc_expect_domain = false;
+static bool archive_toc_expect_transform_kw = false;
+
+/*
  * archive_toc_token_end is the end of whichever token archive_toc_lex()
  * just matched, as a raw pointer into flex's own stable internal scan
  * buffer (the one yy_scan_string allocates and keeps for as long as the
@@ -308,7 +321,8 @@ const char *archive_toc_token_end;
 " "+"LANGUAGE"" "+                 { return LANGUAGE_KW; }
 " "+"SERVER"" "+                   { return SERVER_KW; }
 " "+"USING"" "+                    { return USING; }
-" "+"ON"" "+                       { return ON; }
+" "+"ON"" "+                       { archive_toc_expect_domain = true;
+                                     return ON; }
 
   /*
    * CAST's and USER MAPPING's own repeated tag words (dumpCast's and
@@ -351,7 +365,8 @@ const char *archive_toc_token_end;
 " "+$                              { return NO_OWNER; }
 
   /* NESTED_ON_RELATION's own " ON " separator -- see TOCBODY's own rule. */
-" "+"ON"" "+                       { return ON; }
+" "+"ON"" "+                       { archive_toc_expect_domain = true;
+                                     return ON; }
 
 " "+                               { archive_toc_lval.pos = archive_toc_token_end;
                                      return SPACE; }
@@ -464,6 +479,7 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 
 			case ARCHIVE_TAG_TRANSFORM:
 			{
+				archive_toc_expect_transform_kw = true;
 				return TOP_TRANSFORM;
 			}
 
@@ -493,6 +509,20 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 				return TOP_RELATION;
 			}
 
+			/*
+			 * default here is not an unrecognized-tag catch-all: every
+			 * desc that can reach this switch already comes from one of
+			 * the keyword patterns at the top of this file (%% section),
+			 * each tied to one specific ArchiveItemDesc -- text this
+			 * grammar genuinely doesn't recognize never gets here at all
+			 * (it just never matches any of those patterns, so it scans
+			 * as an ordinary WORD instead). What lands in default is
+			 * every top-level tag with no further-structured shape of
+			 * its own -- ACCESS METHOD, DATABASE, SCHEMA, TYPE, and the
+			 * rest -- which TOP_SIMPLE's own grammar production (one
+			 * nspname/name/owner shape) already covers correctly, so
+			 * there is nothing more specific to dispatch them to.
+			 */
 			default:
 			{
 				return TOP_SIMPLE;
@@ -502,6 +532,17 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 	else
 	{
 		/*
+		 * One switch, not two: each case sets BOTH which start condition
+		 * this object type's own identifier scans under AND which
+		 * NESTED_* token it returns, together, since they're the same
+		 * per-tag decision made twice over otherwise -- a prior version
+		 * of this function used two separate switches over this same
+		 * desc enum, one per decision, which is exactly the duplicated-
+		 * enumeration hazard this whole rewrite exists to retire
+		 * (forgetting to update one of two case lists when adding a tag
+		 * is a real, already-hit failure mode, see TOCBODY/TOCQBODY's
+		 * own file-header comment on the bug that first exposed it).
+		 *
 		 * Only these own an identifier pg_dump itself built with
 		 * fmtId() and so can be double-quoted (archive_toc_object_has_
 		 * ident's old list, carried over) -- everything else nested,
@@ -519,46 +560,20 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_FOREIGN_TABLE:
 			case ARCHIVE_TAG_INDEX:
 			case ARCHIVE_TAG_SEQUENCE:
-			case ARCHIVE_TAG_COLUMN:
-			case ARCHIVE_TAG_CONSTRAINT:
-			case ARCHIVE_TAG_TRIGGER:
-			case ARCHIVE_TAG_POLICY:
-			case ARCHIVE_TAG_RULE:
-			case ARCHIVE_TAG_FUNCTION:
-			case ARCHIVE_TAG_PROCEDURE:
-			case ARCHIVE_TAG_AGGREGATE:
-			case ARCHIVE_TAG_OPERATOR:
 			{
 				BEGIN(TOCQBODY);
-				break;
-			}
-
-			default:
-			{
-				BEGIN(TOCBODY);
-				break;
-			}
-		}
-
-		switch (desc)
-		{
-			case ARCHIVE_TAG_TABLE:
-			case ARCHIVE_TAG_VIEW:
-			case ARCHIVE_TAG_MATERIALIZED_VIEW:
-			case ARCHIVE_TAG_FOREIGN_TABLE:
-			case ARCHIVE_TAG_INDEX:
-			case ARCHIVE_TAG_SEQUENCE:
-			{
 				return NESTED_RELATION_LIKE;
 			}
 
 			case ARCHIVE_TAG_COLUMN:
 			{
+				BEGIN(TOCQBODY);
 				return NESTED_COLUMN;
 			}
 
 			case ARCHIVE_TAG_EXTENSION:
 			{
+				BEGIN(TOCBODY);
 				return NESTED_EXTENSION;
 			}
 
@@ -567,6 +582,7 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_POLICY:
 			case ARCHIVE_TAG_RULE:
 			{
+				BEGIN(TOCQBODY);
 				return NESTED_ON_RELATION;
 			}
 
@@ -574,32 +590,50 @@ archive_toc_tag_token(ArchiveItemDesc desc)
 			case ARCHIVE_TAG_PROCEDURE:
 			case ARCHIVE_TAG_AGGREGATE:
 			{
+				BEGIN(TOCQBODY);
 				return NESTED_FUNCLIKE;
 			}
 
 			case ARCHIVE_TAG_OPERATOR:
 			{
+				BEGIN(TOCQBODY);
 				return NESTED_OPERATOR;
 			}
 
 			case ARCHIVE_TAG_CAST:
 			{
+				BEGIN(TOCBODY);
 				return NESTED_CAST;
 			}
 
 			case ARCHIVE_TAG_TRANSFORM:
 			{
+				BEGIN(TOCBODY);
+				archive_toc_expect_transform_kw = true;
 				return NESTED_TRANSFORM;
 			}
 
 			case ARCHIVE_TAG_OPERATOR_CLASS:
 			case ARCHIVE_TAG_OPERATOR_FAMILY:
 			{
+				BEGIN(TOCBODY);
 				return NESTED_OPCLASS_FAMILY;
 			}
 
+			/*
+			 * Same reasoning as the top-level switch's own default,
+			 * above: every desc reaching here already came from one of
+			 * this file's keyword patterns, so this is every nested
+			 * object type with no further-structured shape of its own
+			 * (ACL/COMMENT itself can never recurse into another ACL/
+			 * COMMENT, and most top-level-only tags -- DATABASE, SCHEMA,
+			 * LANGUAGE, SERVER, ... -- never actually appear nested in
+			 * real pg_restore --list output either), not a fallback for
+			 * unrecognized text.
+			 */
 			default:
 			{
+				BEGIN(TOCBODY);
 				return NESTED_GENERIC;
 			}
 		}
@@ -626,17 +660,22 @@ archive_toc_begin_nested_tag(void)
 /*
  * archive_toc_word_or_keyword_token classifies a plain (unquoted) run of
  * non-space, non-structural characters matched in TOCBODY/TOCQBODY:
- * either DOMAIN, or TRANSFORM's own repeated tag word (dumpTransform's
- * labelq always writes "TRANSFORM FOR typename LANGUAGE langname" for
- * the remainder, pg_dump.c; FOR's own pattern already bakes in the
- * separator space ahead of it, see above, so unlike CAST_KW this one
- * needs no pattern of its own), or a generic word -- mirrors scan.l's
- * own generic-word-then-classify approach: a real identifier spelled
- * exactly "DOMAIN" or "TRANSFORM" would be misread, but both are
- * reserved SQL keywords, so an unquoted identifier can never actually
- * be exactly one of them; a literal name that needed quoting for this
- * reason would come through TOCQIDENT instead, never reaching this rule
- * at all.
+ * either DOMAIN (only right after ON) or TRANSFORM's own repeated tag
+ * word (only as a TRANSFORM entry's very first body word -- dumpTransform's
+ * labelq always writes "TRANSFORM FOR typename LANGUAGE langname" for the
+ * remainder, pg_dump.c; FOR's own pattern already bakes in the separator
+ * space ahead of it, see above, so unlike CAST_KW this one needs no
+ * pattern of its own), or a generic word.
+ *
+ * Unlike a blanket text match, both reclassifications are gated by
+ * archive_toc_expect_domain/archive_toc_expect_transform_kw (see their
+ * own comment, above archive_toc_tag_token): DOMAIN is not actually a
+ * reserved Postgres keyword (it's unreserved) and TRANSFORM isn't a
+ * keyword at all, so either can be a real, unquoted object name anywhere
+ * else a WORD is expected -- a table literally named `DOMAIN` must still
+ * parse as an ordinary name. Both flags are consumed (reset to false)
+ * on every call, win or lose, so a stale flag from several tokens back
+ * can never leak into an unrelated later match.
  *
  * isLast (true only for the $-anchored twin of this rule, see the file
  * header) distinguishes LASTWORD from plain WORD for the generic case --
@@ -646,21 +685,20 @@ archive_toc_begin_nested_tag(void)
 static int
 archive_toc_word_or_keyword_token(bool isLast)
 {
-	static const struct
-	{
-		const char *word;
-		int token;
-	} keywords[] = {
-		{ "DOMAIN", DOMAIN },
-		{ "TRANSFORM", TRANSFORM_KW }
-	};
+	bool expectDomain = archive_toc_expect_domain;
+	bool expectTransformKw = archive_toc_expect_transform_kw;
 
-	for (size_t i = 0; i < sizeof(keywords) / sizeof(keywords[0]); i++)
+	archive_toc_expect_domain = false;
+	archive_toc_expect_transform_kw = false;
+
+	if (expectDomain && streq(yytext, "DOMAIN"))
 	{
-		if (streq(yytext, keywords[i].word))
-		{
-			return keywords[i].token;
-		}
+		return DOMAIN;
+	}
+
+	if (expectTransformKw && streq(yytext, "TRANSFORM"))
+	{
+		return TRANSFORM_KW;
 	}
 
 	archive_toc_lval.word.text = strdup(yytext);
@@ -724,6 +762,7 @@ archive_toc_lex_line(const char *line)
 	if (archive_toc_buffer != NULL)
 	{
 		archive_toc__delete_buffer(archive_toc_buffer);
+		archive_toc_buffer = NULL;
 	}
 
 	size_t bytes = strlen(line) + 2;
