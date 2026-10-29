@@ -33,7 +33,7 @@
    
      pgcopydb dump
        schema  Dump source database schema as custom files in work directory
-       roles   Dump source database roles as custome file in work directory
+       roles   Dump source database roles as custom file in work directory
    
      pgcopydb restore
        schema     Restore a database schema from custom files to target database

@@ -1,6 +1,6 @@
 ::
 
-   pgcopydb dump roles: Dump source database roles as custome file in work directory
+   pgcopydb dump roles: Dump source database roles as custom file in work directory
    usage: pgcopydb dump roles  --source <URI>
    
      --source            Postgres URI to the source database

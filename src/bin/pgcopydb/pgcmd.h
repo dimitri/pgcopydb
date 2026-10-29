@@ -155,6 +155,7 @@ typedef enum
  * (COMMENT ON, SECURITY LABEL, GRANT/REVOKE) these archive entries are the
  * already-executed result of.
  */
+
 /*
  * ArchiveFunctionSignature is set when objectType (ArchiveContentItem's
  * own field, below) is FUNCTION, PROCEDURE or AGGREGATE, OR when desc
