@@ -56,19 +56,12 @@ OUTPUTDB=$(find ${SHAREDIR} -maxdepth 1 -name '*-output.db' -type f | head -1)
 sqlite3 ${OUTPUTDB} "select count(*) as output_rows from output;"
 
 #
-# Validate that the pgoutput_col table exists and has rows.
-#
-col_rows=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
-  "select count(*) from pgoutput_col;")
-echo "pgoutput_col rows: ${col_rows}"
-test "${col_rows}" -gt 0
-
-#
-# Validate that DML rows in output have nspname/relname set and NULL message.
+# Validate that DML rows in output have their columns in the message column,
+# and nspname/relname set.
 #
 null_msg=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
-  "select count(*) from output where action in ('I','U','D','T') and message is not null;")
-echo "DML rows with non-NULL message (should be 0): ${null_msg}"
+  "select count(*) from output where action in ('I','U','D','T') and action != 'T' and message is null;")
+echo "I/U/D rows with a NULL message (should be 0): ${null_msg}"
 test "${null_msg}" -eq 0
 
 nspname_set=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
@@ -77,22 +70,20 @@ echo "DML rows with nspname set: ${nspname_set}"
 test "${nspname_set}" -gt 0
 
 #
+# The columns of a row change are encoded in the message column, one
+# <section><status><length>:<name><length>:<value> per column, the value
+# only for a status of 't'.
+#
 # Validate REPLICA IDENTITY DEFAULT DELETE (K-section):
 #   For the 'rental' DELETE, pgoutput sends a 'K' tuple with only the primary
 #   key column (rental_id) as status='t' and all other columns as status='n'.
-#   The 'n' columns must be stored in pgoutput_col but NOT used in the WHERE
-#   clause (stmt.sql must show only "WHERE rental_id = $1").
+#   The 'n' columns are stored, but NOT used in the WHERE clause (stmt.sql
+#   must show only "WHERE rental_id = $1").
 #
-k_t_cols=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
-  "select count(*) from pgoutput_col c
-   join output o on o.id = c.output_id
-   where o.action = 'D' and o.relname = 'rental'
-     and c.section = 'K' and c.status = 't';")
-k_n_cols=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
-  "select count(*) from pgoutput_col c
-   join output o on o.id = c.output_id
-   where o.action = 'D' and o.relname = 'rental'
-     and c.section = 'K' and c.status = 'n';")
+rental_delete=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
+  "select message from output where action = 'D' and relname = 'rental';")
+k_t_cols=$(echo "${rental_delete}" | grep -o 'Kt[0-9]*:' | wc -l)
+k_n_cols=$(echo "${rental_delete}" | grep -o 'Kn[0-9]*:' | wc -l)
 echo "rental DELETE K-section: status='t' cols=${k_t_cols} (should be 1), status='n' cols=${k_n_cols} (should be 6)"
 test "${k_t_cols}" -eq 1
 test "${k_n_cols}" -eq 6
@@ -104,29 +95,22 @@ test "${k_n_cols}" -eq 6
 #   as "address2 IS NULL".
 #
 o_null_cols=$(sqlite3 -init /dev/null -noheader -list ${OUTPUTDB} \
-  "select count(*) from pgoutput_col c
-   join output o on o.id = c.output_id
-   where o.action = 'D' and o.relname = 'address'
-     and c.section = 'O' and c.name = 'address2' and c.status = 'n';")
+  "select count(*) from output
+   where action = 'D' and relname = 'address'
+     and message like '%On8:address2%';")
 echo "address DELETE O-section address2 NULL cols: ${o_null_cols} (should be > 0)"
 test "${o_null_cols}" -gt 0
 
 #
-# Validate pgoutput_col structured output.
+# Validate the columns stored in the message column.
 # If the golden file is empty (first run), capture the output as the golden file.
 # On subsequent runs, diff against the golden file.
 #
 sqlite3 -init /dev/null -json ${OUTPUTDB} \
-  "select o.action, o.nspname, o.relname, o.old_type,
-          json_group_array(
-            json_object('section',c.section,'pos',c.pos,'name',c.name,
-                        'status',c.status,'value',c.value)
-          ) as cols
-   from output o
-   left join pgoutput_col c on c.output_id = o.id
-   where o.action not in ('K','X','E','B','C')
-   group by o.id
-   order by o.id" \
+  "select action, nspname, relname, old_type, message
+   from output
+   where action in ('I','U','D','T')
+   order by id" \
   > /tmp/result.jsonl
 
 if [ -s /usr/src/pgcopydb/output.pgout ]; then
