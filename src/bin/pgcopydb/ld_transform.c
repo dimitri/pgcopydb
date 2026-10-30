@@ -43,6 +43,10 @@
 
 static bool canCoalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												   LogicalTransactionStatement *new);
+static bool stream_transform_open_transaction(StreamSpecs *specs);
+static bool stream_transform_write_replay_begin(StreamSpecs *specs,
+												uint64_t endlsn);
+static bool stream_transform_write_replay_stmts(StreamSpecs *specs);
 static bool coalesceLogicalTransactionStatement(LogicalTransaction *txn,
 												LogicalTransactionStatement *new);
 
@@ -230,6 +234,33 @@ stream_transform_from_outputdb(StreamSpecs *specs,
 	uint64_t startLSN = previousLSN;
 	bool success = true;
 
+	/*
+	 * A transaction that an earlier process transformed part of and never
+	 * completed is still in replayDB, its BEGIN row without an end LSN. It is
+	 * of no use to this one, which transforms it again from the start, and
+	 * would be taken for the open transaction of this process (and everything
+	 * after it dropped along with it): clear it before writing anything.
+	 */
+	if (specs->private.staleOpenDroppedFrom != replayDB)
+	{
+		bool dropped = false;
+
+		if (!ld_store_replay_drop_open(replayDB, &dropped))
+		{
+			/* errors have already been logged */
+			(void) catalog_execute(replayDB, "ROLLBACK");
+			(void) catalog_commit(outputDB);
+			return false;
+		}
+
+		if (dropped)
+		{
+			specs->private.openGeneration++;
+		}
+
+		specs->private.staleOpenDroppedFrom = replayDB;
+	}
+
 	for (int count = 0; count < STREAM_TRANSFORM_BATCH_MAX_TXNS; count++)
 	{
 		/* tell ld_store_iter_output where to start (last transformed commit) */
@@ -256,6 +287,30 @@ stream_transform_from_outputdb(StreamSpecs *specs,
 		{
 			break;
 		}
+	}
+
+	/*
+	 * What the loop stopped on may be a transaction that receive has not
+	 * reached the COMMIT of: transform what receive has committed of it so
+	 * far, rather than wait for the rest of it (the transform of a large
+	 * transaction then overlaps its receive).
+	 */
+	if (success &&
+		!specs->private.midTxnEndpos &&
+		specs->private.pendingXid != 0)
+	{
+		success = stream_transform_open_transaction(specs);
+	}
+
+	if (!success)
+	{
+		/* what was written is rolled back below: start the transaction over */
+		LogicalMessage empty = { 0 };
+
+		specs->private.currentMsg = empty;
+		specs->private.openXid = 0;
+		specs->private.openReplayBeginId = 0;
+		specs->private.openGeneration++;
 	}
 
 	/* the caller's cursor is what it was: it advances as it applies */
@@ -2137,8 +2192,9 @@ stream_transform_write_replay_stmt(StreamSpecs *specs)
 
 
 /*
- * stream_transform_write_replay_txn walks through a transaction's list of
- * statements and inserts them in the replayDB stmt and replay tables.
+ * stream_transform_write_replay_txn writes the rest of a transaction to the
+ * replayDB stmt and replay tables, with its COMMIT or ROLLBACK row: what the
+ * transform has not already written as the transaction was still open.
  */
 bool
 stream_transform_write_replay_txn(StreamSpecs *specs)
@@ -2147,16 +2203,73 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 	LogicalMessage *msg = &(privateContext->currentMsg);
 	LogicalTransaction *txn = &(msg->command.tx);
 
+	uint64_t endlsn = txn->commit ? txn->commitLSN : txn->rollbackLSN;
+
+	log_debug("stream_transform_write_replay_txn: lsn %X/%X endlsn %X/%X",
+			  LSN_FORMAT_ARGS(txn->beginLSN),
+			  LSN_FORMAT_ARGS(endlsn));
+
+	if (!stream_transform_write_replay_begin(specs, endlsn) ||
+		!stream_transform_write_replay_stmts(specs))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	ReplayDBStmt end = {
+		.action = txn->rollback ? STREAM_ACTION_ROLLBACK : STREAM_ACTION_COMMIT,
+		.xid = txn->xid,
+		.lsn = txn->rollback ? txn->rollbackLSN : txn->commitLSN
+	};
+
+	strlcpy(end.timestamp, txn->timestamp, sizeof(end.timestamp));
+
+	if (!ld_store_insert_replay_stmt(specs->replayDB, &end))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* the transaction is complete: no longer open */
+	privateContext->openXid = 0;
+	privateContext->openBeginId = 0;
+	privateContext->openLastId = 0;
+	privateContext->openReplayBeginId = 0;
+
+	return true;
+}
+
+
+/*
+ * stream_transform_write_replay_begin writes the BEGIN row of the current
+ * transaction to replayDB.  The apply process takes a transaction by the end
+ * LSN of its BEGIN row, which a transaction that is still open does not have
+ * yet: it is written without, and invisible to apply until it is set.
+ */
+static bool
+stream_transform_write_replay_begin(StreamSpecs *specs, uint64_t endlsn)
+{
+	StreamContext *privateContext = &(specs->private);
+	LogicalTransaction *txn = &(privateContext->currentMsg.command.tx);
+
+	if (privateContext->openReplayBeginId != 0)
+	{
+		if (endlsn == InvalidXLogRecPtr)
+		{
+			return true;
+		}
+
+		return ld_store_replay_set_endlsn(specs->replayDB,
+										  privateContext->openReplayBeginId,
+										  endlsn);
+	}
+
 	ReplayDBStmt begin = {
 		.action = STREAM_ACTION_BEGIN,
 		.xid = txn->xid,
 		.lsn = txn->beginLSN,
-		.endlsn = txn->commit ? txn->commitLSN : txn->rollbackLSN
+		.endlsn = endlsn
 	};
-
-	log_debug("stream_transform_write_replay_txn: lsn %X/%X endlsn %X/%X",
-			  LSN_FORMAT_ARGS(begin.lsn),
-			  LSN_FORMAT_ARGS(begin.endlsn));
 
 	strlcpy(begin.timestamp, txn->timestamp, sizeof(begin.timestamp));
 
@@ -2165,6 +2278,28 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 		/* errors have already been logged */
 		return false;
 	}
+
+	if (endlsn == InvalidXLogRecPtr)
+	{
+		privateContext->openReplayBeginId =
+			sqlite3_last_insert_rowid(specs->replayDB->db);
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_transform_write_replay_stmts writes the statements the current
+ * transaction has gathered so far to replayDB, and lets go of them: a
+ * transaction that is still open goes on from an empty list.
+ */
+static bool
+stream_transform_write_replay_stmts(StreamSpecs *specs)
+{
+	StreamContext *privateContext = &(specs->private);
+	LogicalMessage *msg = &(privateContext->currentMsg);
+	LogicalTransaction *txn = &(msg->command.tx);
 
 	GeneratedColumnsCache *cache = privateContext->generatedColumnsCache;
 
@@ -2258,21 +2393,76 @@ stream_transform_write_replay_txn(StreamSpecs *specs)
 		}
 	}
 
-	ReplayDBStmt end = {
-		.action = txn->rollback ? STREAM_ACTION_ROLLBACK : STREAM_ACTION_COMMIT,
-		.xid = txn->xid,
-		.lsn = txn->rollback ? txn->rollbackLSN : txn->commitLSN
-	};
+	txn->first = NULL;
+	txn->last = NULL;
+	txn->count = 0;
 
-	strlcpy(end.timestamp, txn->timestamp, sizeof(end.timestamp));
+	return true;
+}
 
-	if (!ld_store_insert_replay_stmt(specs->replayDB, &end))
+
+/*
+ * stream_transform_open_transaction transforms what receive has committed to
+ * outputDB of a transaction it has not reached the COMMIT of, and writes it to
+ * replayDB as a transaction that cannot be applied yet.  The pass that finds
+ * the COMMIT row writes the rest, and makes it visible to apply.
+ *
+ * Such a transaction is complete once decoded and committed: with pgoutput
+ * (and the other plugins pgcopydb reads) the server only sends a transaction
+ * once it has committed.  What receive spools of it is a prefix of that.
+ */
+static bool
+stream_transform_open_transaction(StreamSpecs *specs)
+{
+	StreamContext *privateContext = &(specs->private);
+
+	if (privateContext->openXid != privateContext->pendingXid ||
+		privateContext->openBeginId != privateContext->pendingBeginId)
+	{
+		/*
+		 * The first piece of this transaction, or receive replaced it (it
+		 * went back to the server for it).  Whatever replayDB holds of an
+		 * earlier attempt is not part of it.
+		 */
+		LogicalMessage empty = { 0 };
+
+		privateContext->currentMsg = empty;
+
+		bool dropped = false;
+
+		if (!ld_store_replay_drop_open(specs->replayDB, &dropped))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (dropped)
+		{
+			privateContext->openGeneration++;
+		}
+
+		privateContext->openXid = privateContext->pendingXid;
+		privateContext->openBeginId = privateContext->pendingBeginId;
+		privateContext->openLastId = privateContext->pendingBeginId - 1;
+		privateContext->openReplayBeginId = 0;
+	}
+
+	if (!ld_store_iter_output_open(specs, &stream_transform_cdc_file_hook))
 	{
 		/* errors have already been logged */
 		return false;
 	}
 
-	return true;
+	LogicalMessage *msg = &(privateContext->currentMsg);
+
+	if (!msg->isTransaction)
+	{
+		/* the BEGIN row has not come through: nothing to write yet */
+		return true;
+	}
+
+	return stream_transform_write_replay_begin(specs, InvalidXLogRecPtr) &&
+		   stream_transform_write_replay_stmts(specs);
 }
 
 

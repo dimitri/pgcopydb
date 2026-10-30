@@ -120,6 +120,13 @@ typedef bool (ReplayDBOutputIterFun)(StreamSpecs *specs,
 									 bool *stop);
 
 bool ld_store_iter_output(StreamSpecs *specs, ReplayDBOutputIterFun *callback);
+bool ld_store_replay_set_endlsn(DatabaseCatalog *catalog, int64_t id,
+								uint64_t endlsn);
+bool ld_store_replay_drop_open(DatabaseCatalog *catalog, bool *dropped);
+bool ld_store_replay_txn_is_complete(DatabaseCatalog *catalog, uint64_t id,
+									 uint32_t xid, bool *complete);
+bool ld_store_iter_output_open(StreamSpecs *specs,
+							   ReplayDBOutputIterFun *callback);
 
 typedef struct ReplayDBOutputIterator
 {
@@ -151,6 +158,15 @@ typedef struct ReplayDBOutputIterator
 	 *       to the receive run_end_lsn so the outer loop exits cleanly.
 	 */
 	uint32_t pending_xid;
+	int64_t pending_begin_id;
+
+	/*
+	 * resume_after_id is the last output row of the transaction that an
+	 * earlier pass has already consumed (0: none), the transaction being
+	 * iterated from the row after it.
+	 */
+	int64_t resume_after_id;
+	int64_t resume_begin_id;
 } ReplayDBOutputIterator;
 
 bool ld_store_iter_output_init(ReplayDBOutputIterator *iter);

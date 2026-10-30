@@ -527,6 +527,37 @@ typedef struct StreamContext
 	uint64_t transformedCommitLSN;
 
 	/*
+	 * The transaction at the head of outputDB that receive has not reached
+	 * the COMMIT of yet, as found by ld_store_iter_output: pendingXid is 0
+	 * when there is none.
+	 */
+	uint32_t pendingXid;
+	int64_t pendingBeginId;
+
+	/*
+	 * The transaction the transform has started on before its COMMIT is in
+	 * outputDB (see stream_transform_open_transaction): it is transformed in
+	 * pieces as receive commits them, and openLastId is the last output row
+	 * it has consumed, so that the pass that finds the COMMIT continues from
+	 * there.  openReplayBeginId is the id of its BEGIN row in replayDB, which
+	 * has no end LSN until the COMMIT, and so cannot be applied before.
+	 */
+	uint32_t openXid;
+	int64_t openBeginId;
+	int64_t openLastId;
+	int64_t openReplayBeginId;
+
+	/*
+	 * Counts the times the rows of an open transaction were taken back out of
+	 * replayDB, for the apply process to know that what it sent of one to the
+	 * target is not what replayDB holds of it anymore.
+	 */
+	uint32_t openGeneration;
+
+	/* the replayDB whose open rows from an earlier process were dropped */
+	DatabaseCatalog *staleOpenDroppedFrom;
+
+	/*
 	 * Cursor over the KEEPALIVE and SWITCH rows of outputDB, set by
 	 * stream_transform_from_outputdb from the apply's own marker cursor.
 	 */
@@ -631,6 +662,22 @@ typedef struct StreamApplyContext
 	bool endPosRecordSeen;      /* saw a record at or past endpos */
 	bool reachedEOF;
 	bool transactionInProgress;
+
+	/*
+	 * A transaction can be sent to the target before its COMMIT has reached
+	 * replayDB (see stream_apply_open_transaction): openTxn is set while one
+	 * is open on the target, with its BEGIN row in replayDB, the last row sent
+	 * and the generation of the transform's open transaction it was taken
+	 * from. The state of the transaction on the target is kept with it.
+	 */
+	bool openTxn;
+	uint32_t openTxnXid;
+	uint64_t openTxnBeginId;
+	uint64_t openTxnLastId;
+	uint32_t openTxnGeneration;
+	TargetRelkind *txnSentRefresh;
+	bool txnContainsMessage;
+
 	bool logSQL;
 
 	PreparedStmt *preparedStmt;

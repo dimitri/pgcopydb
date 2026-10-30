@@ -60,6 +60,15 @@ static bool setupConnection(PGSQL *pgsql, StreamApplyContext *context);
 static bool stream_apply_load_target_relkinds(StreamApplyContext *context);
 
 static bool stream_apply_dml(StreamApplyContext *context, ReplayDBStmt *s);
+static bool stream_apply_txn_dml(StreamApplyContext *context, ReplayDBStmt *s);
+static void stream_apply_txn_reset(StreamApplyContext *context);
+static bool stream_apply_abort_open(StreamApplyContext *context);
+static bool stream_apply_open_transaction(StreamSpecs *specs,
+										  StreamApplyContext *context,
+										  bool *progressed);
+static bool stream_apply_send_open_rows(StreamApplyContext *context,
+										StreamContext *privateContext,
+										bool *progressed);
 static bool stream_apply_transaction(StreamApplyContext *context,
 									 uint32_t xid,
 									 uint64_t begin_id,
@@ -542,6 +551,26 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			}
 
 			/*
+			 * A transaction receive is still spooling, which the transform
+			 * has taken as far as it could: send what it has to the target
+			 * now, inside the transaction that its COMMIT will end.
+			 */
+			bool openProgressed = false;
+
+			if (!stream_apply_open_transaction(specs, context, &openProgressed))
+			{
+				/* errors have already been logged */
+				success = false;
+				goto done;
+			}
+
+			if (openProgressed)
+			{
+				stalledPasses = 0;
+				continue;
+			}
+
+			/*
 			 * A pass can hand over complete transactions and then meet the
 			 * open one that endpos falls in: apply those first, the next
 			 * pass finds the open one again with nothing before it.
@@ -876,6 +905,16 @@ stream_apply_replaydb(StreamSpecs *specs, StreamApplyContext *context)
 			current.last_txn_complete = false;
 			current.last_txn_processed = false;
 
+			/* rows sent early that the transform took back are not this */
+			if (context->openTxn &&
+				context->openTxnGeneration != specs->private.openGeneration &&
+				!stream_apply_abort_open(context))
+			{
+				/* errors have already been logged */
+				success = false;
+				goto done;
+			}
+
 			if (!stream_apply_transaction(context, xid, begin_id, commitLSN))
 			{
 				/* errors have already been logged */
@@ -1080,16 +1119,38 @@ stream_apply_transaction(StreamApplyContext *context,
 	bool sync = (context->endpos != InvalidXLogRecPtr &&
 				 context->endpos <= commitLSN);
 
-	if (!stream_apply_set_gucs(context, sync ? applySettingsSync : applySettings))
+	/*
+	 * The transaction may have been begun on the target already, with the
+	 * rows of it that replayDB had before its COMMIT: carry on after those.
+	 * Another one open is not this transaction anymore.
+	 */
+	bool resumed = context->openTxn &&
+				   context->openTxnBeginId == begin_id &&
+				   context->openTxnXid == xid;
+
+	if (context->openTxn && !resumed)
 	{
-		/* errors have already been logged */
-		return false;
+		if (!stream_apply_abort_open(context))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
-	if (!pgsql_begin(applyPgConn))
+	if (!resumed)
 	{
-		/* errors have already been logged */
-		return false;
+		if (!stream_apply_set_gucs(context,
+								   sync ? applySettingsSync : applySettings))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (!pgsql_begin(applyPgConn))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	context->transactionInProgress = true;
@@ -1100,7 +1161,7 @@ stream_apply_transaction(StreamApplyContext *context,
 
 	iter.catalog = replayDB;
 	iter.xid = xid;
-	iter.begin_id = begin_id;
+	iter.begin_id = resumed ? context->openTxnLastId + 1 : begin_id;
 
 	if (!ld_store_iter_replay_txn_init(&iter))
 	{
@@ -1108,31 +1169,12 @@ stream_apply_transaction(StreamApplyContext *context,
 		context->appliedGucs = NULL;
 		(void) pgsql_execute(applyPgConn, "ROLLBACK");
 		context->transactionInProgress = false;
+		stream_apply_txn_reset(context);
 		return false;
 	}
 
 	bool success = true;
 	char commitTimestamp[PG_MAX_TIMESTAMP] = { 0 };
-
-	/*
-	 * Set when any row in this transaction is a decoded DDL/message
-	 * envelope (see stream_apply_dml's STREAM_ACTION_MESSAGE case). Such a
-	 * transaction forces an immediate pipeline sync at COMMIT, bypassing
-	 * the batching thresholds below: a schema change is exactly the kind
-	 * of rare, operator-visible event that must be confirmed on the
-	 * target the moment it is replayed, not whenever a later, unrelated
-	 * transaction happens to fill the batch.
-	 */
-	bool containsMessage = false;
-
-	/*
-	 * Per-transaction sent-REFRESH set: when the first DML row targeting a
-	 * matview is detected we immediately queue REFRESH on the pipeline so the
-	 * server can start executing it while the client continues reading the
-	 * remaining DML rows from SQLite.  The hash deduplicates: subsequent DML
-	 * rows for the same matview are skipped without sending another REFRESH.
-	 */
-	TargetRelkind *sentRefresh = NULL;
 
 	for (;;)
 	{
@@ -1179,12 +1221,7 @@ stream_apply_transaction(StreamApplyContext *context,
 
 			(void) ld_store_iter_replay_txn_finish(&iter);
 
-			TargetRelkind *pr, *prTmp;
-			HASH_ITER(hh, sentRefresh, pr, prTmp)
-			{
-				HASH_DEL(sentRefresh, pr);
-				free(pr);
-			}
+			stream_apply_txn_reset(context);
 
 			context->appliedGucs = NULL;
 			if (!pgsql_execute(applyPgConn, "ROLLBACK"))
@@ -1198,110 +1235,21 @@ stream_apply_transaction(StreamApplyContext *context,
 		}
 
 		/* DML row (INSERT / UPDATE / DELETE / TRUNCATE) */
-
-		/*
-		 * If the target relation is a materialized view, skip the DML and
-		 * issue REFRESH MATERIALIZED VIEW on the first occurrence.  REFRESH
-		 * is queued into the pipeline immediately (no CONCURRENTLY, so it
-		 * runs inside the open transaction) — the server starts executing it
-		 * while the client continues reading the rest of the DML rows from
-		 * SQLite.  Subsequent DML rows for the same matview are silently
-		 * skipped using the sentRefresh deduplication hash.
-		 */
-		if (s->action != STREAM_ACTION_TRUNCATE &&
-			context->targetRelkindCache != NULL &&
-			!IS_EMPTY_STRING_BUFFER(s->nspname))
-		{
-			TargetRelkind lookupKey = { 0 };
-			strlcpy(lookupKey.nspname, s->nspname, sizeof(lookupKey.nspname));
-			strlcpy(lookupKey.relname, s->relname, sizeof(lookupKey.relname));
-
-			unsigned keylen =
-				offsetof(TargetRelkind, relname) +
-				sizeof(lookupKey.relname) -
-				offsetof(TargetRelkind, nspname);
-
-			TargetRelkind *found = NULL;
-
-			HASH_FIND(hh, context->targetRelkindCache,
-					  lookupKey.nspname, keylen, found);
-
-			if (found != NULL && found->relkind == 'm')
-			{
-				TargetRelkind *sent = NULL;
-
-				HASH_FIND(hh, sentRefresh, lookupKey.nspname, keylen, sent);
-
-				if (sent == NULL)
-				{
-					/*
-					 * First DML row for this matview in this transaction:
-					 * send REFRESH now into the pipeline so the server starts
-					 * working on it immediately.
-					 */
-					char refreshSQL[BUFSIZE] = { 0 };
-
-					sformat(refreshSQL, sizeof(refreshSQL),
-							"REFRESH MATERIALIZED VIEW %s.%s",
-							s->nspname, s->relname);
-
-					log_info("Refreshing materialized view %s.%s (xid %u)",
-							 s->nspname, s->relname, xid);
-
-					if (!pgsql_execute(applyPgConn, refreshSQL))
-					{
-						log_error("Failed to queue REFRESH for %s.%s",
-								  s->nspname, s->relname);
-						success = false;
-						break;
-					}
-
-					sent = (TargetRelkind *) calloc(1, sizeof(TargetRelkind));
-
-					if (sent == NULL)
-					{
-						log_error(ALLOCATION_FAILED_ERROR);
-						success = false;
-						break;
-					}
-
-					strlcpy(sent->nspname, s->nspname, sizeof(sent->nspname));
-					strlcpy(sent->relname, s->relname, sizeof(sent->relname));
-					sent->relkind = 'm';
-
-					HASH_ADD(hh, sentRefresh, nspname, keylen, sent);
-				}
-
-				/* skip the DML row — REFRESH covers the matview update */
-				continue;
-			}
-		}
-
-		if (s->action == STREAM_ACTION_MESSAGE)
-		{
-			containsMessage = true;
-		}
-
-		if (!stream_apply_dml(context, s))
+		if (!stream_apply_txn_dml(context, s))
 		{
 			/* errors have already been logged */
 			success = false;
 			break;
 		}
+
+		context->openTxnLastId = s->id;
 	}
 
 	(void) ld_store_iter_replay_txn_finish(&iter);
 
-	/* free the per-transaction sent-REFRESH dedup set */
-	{
-		TargetRelkind *pr, *prTmp;
+	bool containsMessage = context->txnContainsMessage;
 
-		HASH_ITER(hh, sentRefresh, pr, prTmp)
-		{
-			HASH_DEL(sentRefresh, pr);
-			free(pr);
-		}
-	}
+	stream_apply_txn_reset(context);
 
 	if (!success)
 	{
@@ -1406,6 +1354,324 @@ stream_apply_transaction(StreamApplyContext *context,
 	 * checkpoints it to sourceDB periodically and at end of processing.
 	 */
 	return true;
+}
+
+
+/*
+ * stream_apply_txn_dml sends a DML row of the transaction in progress on the
+ * target.
+ *
+ * If the target relation is a materialized view, the DML is skipped and
+ * REFRESH MATERIALIZED VIEW is queued on the first occurrence, with no
+ * CONCURRENTLY so that it runs inside the open transaction: the server starts
+ * executing it while the client carries on reading DML rows from SQLite. The
+ * following DML rows for the same matview are skipped without sending another
+ * REFRESH, using the txnSentRefresh hash.
+ */
+static bool
+stream_apply_txn_dml(StreamApplyContext *context, ReplayDBStmt *s)
+{
+	PGSQL *applyPgConn = &(context->applyPgConn);
+
+	if (s->action != STREAM_ACTION_TRUNCATE &&
+		context->targetRelkindCache != NULL &&
+		!IS_EMPTY_STRING_BUFFER(s->nspname))
+	{
+		TargetRelkind lookupKey = { 0 };
+		strlcpy(lookupKey.nspname, s->nspname, sizeof(lookupKey.nspname));
+		strlcpy(lookupKey.relname, s->relname, sizeof(lookupKey.relname));
+
+		unsigned keylen =
+			offsetof(TargetRelkind, relname) +
+			sizeof(lookupKey.relname) -
+			offsetof(TargetRelkind, nspname);
+
+		TargetRelkind *found = NULL;
+
+		HASH_FIND(hh, context->targetRelkindCache,
+				  lookupKey.nspname, keylen, found);
+
+		if (found != NULL && found->relkind == 'm')
+		{
+			TargetRelkind *sent = NULL;
+
+			HASH_FIND(hh, context->txnSentRefresh, lookupKey.nspname, keylen, sent);
+
+			if (sent == NULL)
+			{
+				char refreshSQL[BUFSIZE] = { 0 };
+
+				sformat(refreshSQL, sizeof(refreshSQL),
+						"REFRESH MATERIALIZED VIEW %s.%s",
+						s->nspname, s->relname);
+
+				log_info("Refreshing materialized view %s.%s (xid %u)",
+						 s->nspname, s->relname, s->xid);
+
+				if (!pgsql_execute(applyPgConn, refreshSQL))
+				{
+					log_error("Failed to queue REFRESH for %s.%s",
+							  s->nspname, s->relname);
+					return false;
+				}
+
+				sent = (TargetRelkind *) calloc(1, sizeof(TargetRelkind));
+
+				if (sent == NULL)
+				{
+					log_error(ALLOCATION_FAILED_ERROR);
+					return false;
+				}
+
+				strlcpy(sent->nspname, s->nspname, sizeof(sent->nspname));
+				strlcpy(sent->relname, s->relname, sizeof(sent->relname));
+				sent->relkind = 'm';
+
+				HASH_ADD(hh, context->txnSentRefresh, nspname, keylen, sent);
+			}
+
+			/* REFRESH covers the matview update */
+			return true;
+		}
+	}
+
+	/*
+	 * A decoded DDL/message envelope makes the transaction force an immediate
+	 * pipeline sync at COMMIT, bypassing the batching thresholds: a schema
+	 * change must be confirmed on the target the moment it is replayed.
+	 */
+	if (s->action == STREAM_ACTION_MESSAGE)
+	{
+		context->txnContainsMessage = true;
+	}
+
+	return stream_apply_dml(context, s);
+}
+
+
+/*
+ * stream_apply_txn_reset forgets the state kept for the transaction in
+ * progress on the target, once it is over.
+ */
+static void
+stream_apply_txn_reset(StreamApplyContext *context)
+{
+	TargetRelkind *pr, *prTmp;
+
+	HASH_ITER(hh, context->txnSentRefresh, pr, prTmp)
+	{
+		HASH_DEL(context->txnSentRefresh, pr);
+		free(pr);
+	}
+
+	context->txnContainsMessage = false;
+	context->openTxn = false;
+	context->openTxnXid = 0;
+	context->openTxnBeginId = 0;
+	context->openTxnLastId = 0;
+}
+
+
+/*
+ * stream_apply_abort_open rolls back a transaction sent early, when replayDB
+ * does not hold the rows it was made of anymore.
+ */
+static bool
+stream_apply_abort_open(StreamApplyContext *context)
+{
+	log_notice("Rolling back the transaction sent to the target before its "
+			   "COMMIT: replayDB does not hold its rows anymore");
+
+	stream_apply_txn_reset(context);
+
+	context->appliedGucs = NULL;
+	context->transactionInProgress = false;
+
+	return pgsql_execute(&(context->applyPgConn), "ROLLBACK");
+}
+
+
+/*
+ * stream_apply_open_transaction sends to the target the rows that the
+ * transform has written to replayDB of a transaction receive is still
+ * spooling, inside a transaction that its COMMIT row will end.
+ *
+ * With pgoutput (and the other plugins pgcopydb reads) the server only sends
+ * a transaction once it has committed, and sends transactions in commit
+ * order: what is spooled of a transaction is a prefix of a transaction that
+ * will commit, and nothing commits on the source after it before it does. The
+ * target needs one transaction at a time, then, in the order of the source.
+ * Should the spool lose it (receive went back to the server for it) the
+ * transaction is rolled back, and applied again from the rows that replace it.
+ *
+ * Only without an endpos: its handling is about whole transactions.
+ */
+static bool
+stream_apply_open_transaction(StreamSpecs *specs,
+							  StreamApplyContext *context,
+							  bool *progressed)
+{
+	StreamContext *privateContext = &(specs->private);
+
+	*progressed = false;
+
+	if (context->endpos != InvalidXLogRecPtr)
+	{
+		return true;
+	}
+
+	if (context->openTxn &&
+		(privateContext->openXid == 0 ||
+		 context->openTxnBeginId != (uint64_t) privateContext->openReplayBeginId ||
+		 context->openTxnGeneration != privateContext->openGeneration))
+	{
+		/*
+		 * Not the open transaction of the transform anymore: either it is
+		 * complete, and its BEGIN row is the next event, which picks it up
+		 * from there; or it was taken out of replayDB, and what was sent of
+		 * it is not worth anything.
+		 */
+		bool complete = false;
+
+		if (!ld_store_replay_txn_is_complete(context->replayDB,
+											 context->openTxnBeginId,
+											 context->openTxnXid,
+											 &complete))
+		{
+			/* errors have already been logged */
+			return false;
+		}
+
+		if (complete)
+		{
+			return true;
+		}
+
+		if (!stream_apply_abort_open(context))
+		{
+			return false;
+		}
+	}
+
+	if (privateContext->openXid == 0 || privateContext->openReplayBeginId == 0)
+	{
+		return true;
+	}
+
+	if (!stream_apply_send_open_rows(context, privateContext, progressed))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* make the server work on what was sent, rather than wait for 64kB */
+	if (*progressed && !stream_apply_flush_pipeline(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_send_open_rows sends to the target the rows of the open
+ * transaction that replayDB holds and that have not been sent yet.
+ *
+ * The for(;;) loop reads like it never ends, but it is a plain scan of the
+ * rows the transform has written so far for this transaction, starting right
+ * after the last row sent (openTxnLastId) or after the BEGIN row for a
+ * transaction we have not started on the target yet. It is left when
+ *
+ *  - the iterator returns no more rows: the transform has not written more
+ *    yet, and the next pass of the apply loop picks up from openTxnLastId;
+ *  - the next row is the COMMIT or ROLLBACK row: the transaction is complete
+ *    and the apply loop takes it from here, through
+ *    stream_apply_transaction, which carries on after openTxnLastId;
+ *  - an error, in the iterator, in BEGIN, or in sending a row.
+ *
+ * The target transaction is started lazily, with the first row to send, and
+ * stays open when the loop ends: only the COMMIT row (or a rollback when the
+ * transaction vanishes, see stream_apply_abort_open) closes it. *progressed is
+ * set when at least one row has been sent.
+ */
+static bool
+stream_apply_send_open_rows(StreamApplyContext *context,
+							StreamContext *privateContext,
+							bool *progressed)
+{
+	PGSQL *applyPgConn = &(context->applyPgConn);
+
+	ReplayDBReplayTxnIterator iter = { 0 };
+
+	iter.catalog = context->replayDB;
+	iter.xid = privateContext->openXid;
+	iter.begin_id = context->openTxn
+					? context->openTxnLastId + 1
+					: (uint64_t) privateContext->openReplayBeginId + 1;
+
+	if (!ld_store_iter_replay_txn_init(&iter))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	bool success = true;
+
+	for (;;)
+	{
+		if (!ld_store_iter_replay_txn_next(&iter))
+		{
+			success = false;
+			break;
+		}
+
+		ReplayDBStmt *s = iter.current;
+
+		if (s == NULL)
+		{
+			break;
+		}
+
+		if (s->action == STREAM_ACTION_COMMIT ||
+			s->action == STREAM_ACTION_ROLLBACK)
+		{
+			/* the transaction is complete: the apply loop takes it */
+			break;
+		}
+
+		if (!context->openTxn)
+		{
+			if (!stream_apply_set_gucs(context, applySettings) ||
+				!pgsql_begin(applyPgConn))
+			{
+				success = false;
+				break;
+			}
+
+			context->openTxn = true;
+			context->openTxnXid = privateContext->openXid;
+			context->openTxnBeginId = privateContext->openReplayBeginId;
+			context->openTxnGeneration = privateContext->openGeneration;
+			context->transactionInProgress = true;
+			context->reachedStartPos = true;
+			context->continuedTxn = false;
+		}
+
+		if (!stream_apply_txn_dml(context, s))
+		{
+			success = false;
+			break;
+		}
+
+		context->openTxnLastId = s->id;
+		*progressed = true;
+	}
+
+	(void) ld_store_iter_replay_txn_finish(&iter);
+
+	return success;
 }
 
 
