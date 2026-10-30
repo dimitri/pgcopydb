@@ -304,3 +304,12 @@ alter default privileges in schema toc_fixture grant select on tables to public;
 -- suite)
 --
 comment on extension pg_trgm is 'fixture extension comment';
+
+--
+-- TABLE ATTACH, INDEX ATTACH: a partition attached to its partitioned
+-- parent, and the partition's index attached to the parent's index. Their
+-- TOC lines carry no owning relation: "<id>; 0 0 TABLE ATTACH <schema>
+-- <partition> <owner>".
+--
+create table part_parent (id integer primary key) partition by range (id);
+create table part_child partition of part_parent for values from (0) to (100);
