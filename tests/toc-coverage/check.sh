@@ -183,5 +183,15 @@ check_field "OPERATOR CLASS USING split" \
     '"tag":"COMMENT","schema":"toc_fixture","relation":"","name":"fixture_int_ops_class"' \
     '"accessMethod":"btree"'
 
+# TABLE ATTACH / INDEX ATTACH: no owning relation, so they parse as plain
+# top-level entries rather than failing with "Failed to parse desc".
+check_field "TABLE ATTACH parses" \
+    '"tag":"TABLE ATTACH"' \
+    '"schema":"toc_fixture"'
+
+check_field "INDEX ATTACH parses" \
+    '"tag":"INDEX ATTACH"' \
+    '"schema":"toc_fixture"'
+
 echo
 echo "All toc-coverage checks passed."
