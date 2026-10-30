@@ -5,11 +5,13 @@ nspname | copy
 -[ RECORD 3 ]-----------------
 nspname | foo
 -[ RECORD 4 ]-----------------
-nspname | partitioned_tables
+nspname | partitioned_identity
 -[ RECORD 5 ]-----------------
-nspname | public
+nspname | partitioned_tables
 -[ RECORD 6 ]-----------------
-nspname | schema_name_20_chars
+nspname | public
 -[ RECORD 7 ]-----------------
+nspname | schema_name_20_chars
+-[ RECORD 8 ]-----------------
 nspname | seq
 

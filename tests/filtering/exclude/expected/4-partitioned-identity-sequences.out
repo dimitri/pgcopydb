@@ -1,0 +1,12 @@
+-[ RECORD 1 ]-------
+last_value | 2000000
+is_called  | t
+
+-[ RECORD 1 ]------
+last_value | 400000
+is_called  | f
+
+-[ RECORD 1 ]-------
+last_value | 5000000
+is_called  | t
+

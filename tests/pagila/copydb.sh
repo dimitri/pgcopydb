@@ -57,6 +57,17 @@ grep -v "OWNER TO postgres" /usr/src/pagila/pagila-schema.sql > /tmp/pagila-sche
 psql -o /tmp/s.out -d ${PAGILA_SOURCE_PGURI} -1 -f /tmp/pagila-schema.sql
 psql -o /tmp/d.out -d ${PAGILA_SOURCE_PGURI} -1 -f /usr/src/pagila/pagila-data.sql
 
+# identity sequence owned by a partitioned table, no filter active
+psql -d ${PAGILA_SOURCE_PGURI} <<EOF
+create table public.partitioned_identity (
+    id bigint generated always as identity,
+    created int not null
+) partition by range (created);
+create table public.partitioned_identity_1
+    partition of public.partitioned_identity for values from (0) to (100);
+select setval(pg_get_serial_sequence('public.partitioned_identity', 'id'), 2000000);
+EOF
+
 pgcopydb clone --notice \
          --skip-ext-comments \
          --skip-db-properties \
@@ -72,3 +83,5 @@ pgcopydb compare schema \
 pgcopydb compare data \
          --source ${PAGILA_SOURCE_PGURI} \
          --target ${PAGILA_TARGET_PGURI}
+
+test "$(psql -At -d ${PAGILA_TARGET_PGURI} -c 'select last_value, is_called from public.partitioned_identity_id_seq')" = "2000000|t"
