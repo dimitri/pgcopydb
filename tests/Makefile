@@ -1,7 +1,7 @@
 # Copyright (c) 2021 The PostgreSQL Global Development Group.
 # Licensed under the PostgreSQL License.
 
-PGVERSION ?= 16
+PGVERSION ?= 18
 export PGVERSION
 BUILD_ARGS = --build-arg PGVERSION=$(PGVERSION)
 
