@@ -2510,6 +2510,10 @@ ld_store_replay_drop_open(DatabaseCatalog *catalog, bool *dropped)
 }
 
 
+/*
+ * ld_store_fetch_count is a SQLiteQuery callback that stores the first column
+ * of the row, a count, in the int64_t that query->context points to.
+ */
 static bool
 ld_store_fetch_count(SQLiteQuery *query)
 {
