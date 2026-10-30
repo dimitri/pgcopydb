@@ -555,14 +555,13 @@ entry:
 	/*
 	 * TOP_RELATION is a shape too, grouping every top-level tag whose
 	 * remainder is "owning relation, own name, owner" -- ATTRDEF/
-	 * DEFAULT, CHECK CONSTRAINT, CONSTRAINT, FK CONSTRAINT, INDEX
-	 * ATTACH, POLICY, PUBLICATION TABLE(S IN SCHEMA), RULE, TABLE
-	 * ATTACH, TRIGGER (see archive_toc_tag_token's own switch) -- not
+	 * DEFAULT, CHECK CONSTRAINT, CONSTRAINT, FK CONSTRAINT, POLICY,
+	 * PUBLICATION TABLE(S IN SCHEMA), RULE, TRIGGER (see archive_toc_tag_token's own switch) -- not
 	 * just DEFAULT, despite the token's own name reading like one
 	 * keyword among many others nearby that each got their own token
 	 * (TOP_CAST, TOP_TRANSFORM, ...): those are per-keyword because
 	 * each is the only tag with that exact shape; this one covers
-	 * eleven keywords that all share this one.
+	 * nine keywords that all share this one.
 	 *
 	 * 3396; 2604 16420 DEFAULT toc_fixture child id postgres
 	 * 3404; 2606 16424 FK CONSTRAINT toc_fixture child child_parent_id_fkey postgres
