@@ -135,9 +135,9 @@ parse_version_number(const char *version_string,
 
 
 /*
- * parse_dotted_version_string parses a major.minor dotted version string such
- * as "12.6" into a single number in the same format as the pg_control_version,
- * such as 1206.
+ * parse_dotted_version_string parses a dotted version string such as "12.6"
+ * or "16.14.0" (e.g. from EnterpriseDB EPAS) into a single number in the same
+ * format as the pg_control_version, such as 1206.
  */
 bool
 parse_dotted_version_string(const char *pg_version_string, int *pg_version)
@@ -162,9 +162,11 @@ parse_dotted_version_string(const char *pg_version_string, int *pg_version)
 		{
 			if (dotFound)
 			{
-				log_error("Failed to parse Postgres version number \"%s\"",
-						  pg_version_string);
-				return false;
+				/*
+				 * Stop at the second dot: we already have major and minor digits
+				 * (e.g. 16.14.0 from EnterpriseDB or 9.6.24 from PostgreSQL 9.6).
+				 */
+				break;
 			}
 
 			dotFound = true;
