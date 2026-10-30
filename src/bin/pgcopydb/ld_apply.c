@@ -66,6 +66,9 @@ static bool stream_apply_abort_open(StreamApplyContext *context);
 static bool stream_apply_open_transaction(StreamSpecs *specs,
 										  StreamApplyContext *context,
 										  bool *progressed);
+static bool stream_apply_send_open_rows(StreamApplyContext *context,
+										StreamContext *privateContext,
+										bool *progressed);
 static bool stream_apply_transaction(StreamApplyContext *context,
 									 uint32_t xid,
 									 uint64_t begin_id,
@@ -1555,6 +1558,49 @@ stream_apply_open_transaction(StreamSpecs *specs,
 		return true;
 	}
 
+	if (!stream_apply_send_open_rows(context, privateContext, progressed))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	/* make the server work on what was sent, rather than wait for 64kB */
+	if (*progressed && !stream_apply_flush_pipeline(context))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	return true;
+}
+
+
+/*
+ * stream_apply_send_open_rows sends to the target the rows of the open
+ * transaction that replayDB holds and that have not been sent yet.
+ *
+ * The for(;;) loop reads like it never ends, but it is a plain scan of the
+ * rows the transform has written so far for this transaction, starting right
+ * after the last row sent (openTxnLastId) or after the BEGIN row for a
+ * transaction we have not started on the target yet. It is left when
+ *
+ *  - the iterator returns no more rows: the transform has not written more
+ *    yet, and the next pass of the apply loop picks up from openTxnLastId;
+ *  - the next row is the COMMIT or ROLLBACK row: the transaction is complete
+ *    and the apply loop takes it from here, through
+ *    stream_apply_transaction, which carries on after openTxnLastId;
+ *  - an error, in the iterator, in BEGIN, or in sending a row.
+ *
+ * The target transaction is started lazily, with the first row to send, and
+ * stays open when the loop ends: only the COMMIT row (or a rollback when the
+ * transaction vanishes, see stream_apply_abort_open) closes it. *progressed is
+ * set when at least one row has been sent.
+ */
+static bool
+stream_apply_send_open_rows(StreamApplyContext *context,
+							StreamContext *privateContext,
+							bool *progressed)
+{
 	PGSQL *applyPgConn = &(context->applyPgConn);
 
 	ReplayDBReplayTxnIterator iter = { 0 };
@@ -1625,20 +1671,7 @@ stream_apply_open_transaction(StreamSpecs *specs,
 
 	(void) ld_store_iter_replay_txn_finish(&iter);
 
-	if (!success)
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	/* make the server work on what was sent, rather than wait for 64kB */
-	if (*progressed && !stream_apply_flush_pipeline(context))
-	{
-		/* errors have already been logged */
-		return false;
-	}
-
-	return true;
+	return success;
 }
 
 
