@@ -109,3 +109,5 @@
 3393; 3466 16572 EVENT TRIGGER - fixture_evt postgres
 3622; 0 0 COMMENT - EVENT TRIGGER fixture_evt postgres
 3569; 0 16438 MATERIALIZED VIEW DATA toc_fixture parent_matview postgres
+3610; 0 0 TABLE ATTACH toc_fixture part_child postgres
+3611; 0 0 INDEX ATTACH toc_fixture part_child_pkey postgres
