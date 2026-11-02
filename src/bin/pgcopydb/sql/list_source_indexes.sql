@@ -32,7 +32,8 @@ SELECT i.oid,
        format('%s %s %s',
               regexp_replace(n.nspname, '[\n\r]', ' '),
               regexp_replace(i.relname, '[\n\r]', ' '),
-              regexp_replace(auth.rolname, '[\n\r]', ' '))
+              regexp_replace(auth.rolname, '[\n\r]', ' ')),
+       indisreplident
 
   FROM pg_index x
   JOIN pg_class i ON i.oid = x.indexrelid

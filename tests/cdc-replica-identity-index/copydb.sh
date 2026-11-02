@@ -33,6 +33,29 @@ pgcopydb clone
 kill -TERM ${COPROC_PID}
 wait ${COPROC_PID}
 
+# Regression check: REPLICA IDENTITY USING INDEX must survive the clone,
+# whether it points at a plain unique index (event_matches) or at the index
+# backing a PRIMARY KEY constraint (event_matches_pk). pgcopydb builds indexes
+# itself instead of going through pg_restore for the post-data section, and
+# used to silently drop the ALTER TABLE ... REPLICA IDENTITY USING INDEX
+# clause that pg_dump attaches to the INDEX/CONSTRAINT archive entry.
+for table in event_matches event_matches_pk; do
+	sql="select relreplident from pg_class where oid = '${table}'::regclass"
+
+	src_ri=`psql -At -d ${PGCOPYDB_SOURCE_PGURI} -c "${sql}"`
+	tgt_ri=`psql -At -d ${PGCOPYDB_TARGET_PGURI} -c "${sql}"`
+
+	if [ "${src_ri}" != "${tgt_ri}" ]; then
+		echo "REPLICA IDENTITY mismatch for ${table}: source=${src_ri} target=${tgt_ri}"
+		exit 1
+	fi
+
+	if [ "${src_ri}" != "i" ]; then
+		echo "Expected source table ${table} to have REPLICA IDENTITY USING INDEX (i), got ${src_ri}"
+		exit 1
+	fi
+done
+
 # produce CDC traffic on the source: INSERT, UPDATE, DELETE
 psql -d ${PGCOPYDB_SOURCE_PGURI} -f /usr/src/pgcopydb/dml.sql
 
