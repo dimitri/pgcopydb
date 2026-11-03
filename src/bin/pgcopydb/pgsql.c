@@ -6493,7 +6493,7 @@ pgsql_create_publication(PGSQL *pgsql, const char *pubName,
 						 " FROM pg_tables"
 						 " WHERE schemaname NOT IN"
 						 " ('pg_catalog', 'information_schema', 'pgcopydb')"
-                                                 " AND (schemname NOT LIKE E'pg\\_temp%' OR schemname NOT LIKE E'pg\\_toast\\_temp%'");
+                                                 " AND (schemaname NOT LIKE E'pg\\_temp%' AND schemaname NOT LIKE E'pg\\_toast\\_temp%')");
 
 	if (filters != NULL)
 	{
