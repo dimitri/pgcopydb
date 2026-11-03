@@ -26,6 +26,8 @@
 #include "string_utils.h"
 
 static bool parse_bool_with_len(const char *value, size_t len, bool *result);
+static bool buildHostPortListURIComponent(const char *hostlist,
+										  const char *portlist, char **dst);
 
 #define RE_MATCH_COUNT 10
 
@@ -712,20 +714,17 @@ buildPostgresBareURIfromPieces(URIParams *uriParams, char **pguri)
 
 	if (uriParams->hostname)
 	{
-		char *escaped = NULL;
+		char *hostport = NULL;
 
-		if (!escapeWithPercentEncoding(uriParams->hostname, &escaped))
+		if (!buildHostPortListURIComponent(uriParams->hostname,
+										   uriParams->port,
+										   &hostport))
 		{
 			log_error("Failed to percent-escape URI hostname \"%s\"",
 					  uriParams->hostname);
 			return false;
 		}
-		appendPQExpBuffer(uri, "%s", escaped);
-	}
-
-	if (uriParams->port)
-	{
-		appendPQExpBuffer(uri, ":%s", uriParams->port);
+		appendPQExpBuffer(uri, "%s", hostport);
 	}
 
 	appendPQExpBufferStr(uri, "/");
@@ -753,6 +752,87 @@ buildPostgresBareURIfromPieces(URIParams *uriParams, char **pguri)
 
 	*pguri = strdup(uri->data);
 	destroyPQExpBuffer(uri);
+
+	return true;
+}
+
+
+/*
+ * buildHostPortListURIComponent builds the "host[:port],host[:port],..."
+ * component of a Postgres URI from a parsed hostname and port, each of
+ * which may itself be a comma-separated list for a multi-host connection
+ * string (see "Multiple Host URIs" in the libpq docs, e.g. hostname
+ * "a,b,c" with port ",,5432" meaning only the third host has a port of
+ * its own). PQconninfoParse always returns host and port as same-length
+ * comma lists, one slot per host, empty where a host has no port of its
+ * own, so the two are walked side by side here.
+ *
+ * Each host is percent-escaped on its own, not the whole hostname value
+ * at once: doing the latter turns the separating commas into "%2C",
+ * which libpq's own URI parser only ever splits on literal commas, so
+ * the host list comes back mangled (and its count no longer matches the
+ * port list's) once this URI is parsed again.
+ *
+ * Joining the two lists first and then interleaving ":" between them
+ * (as in "a,b,c:1,2,3") is not an option either: that is not a host:port
+ * pairing libpq's URI grammar understands, which only accepts a port
+ * right after the host it belongs to.
+ */
+static bool
+buildHostPortListURIComponent(const char *hostlist, const char *portlist,
+							  char **dst)
+{
+	PQExpBuffer buf = createPQExpBuffer();
+	const char *h = hostlist;
+	const char *p = portlist != NULL ? portlist : "";
+	bool first = true;
+
+	for (;;)
+	{
+		const char *hComma = strchr(h, ',');
+		size_t hLen = hComma != NULL ? (size_t) (hComma - h) : strlen(h);
+
+		const char *pComma = strchr(p, ',');
+		size_t pLen = pComma != NULL ? (size_t) (pComma - p) : strlen(p);
+
+		char *host = strndup(h, hLen);
+		char *escaped = NULL;
+
+		if (!escapeWithPercentEncoding(host, &escaped))
+		{
+			free(host);
+			destroyPQExpBuffer(buf);
+			return false;
+		}
+
+		appendPQExpBuffer(buf, "%s%s", first ? "" : ",", escaped);
+
+		if (pLen > 0)
+		{
+			appendPQExpBuffer(buf, ":%.*s", (int) pLen, p);
+		}
+
+		free(host);
+		first = false;
+
+		if (hComma == NULL)
+		{
+			break;
+		}
+
+		h = hComma + 1;
+		p = pComma != NULL ? pComma + 1 : "";
+	}
+
+	if (PQExpBufferBroken(buf))
+	{
+		log_error("Failed to build URI host/port list: out of memory");
+		destroyPQExpBuffer(buf);
+		return false;
+	}
+
+	*dst = strdup(buf->data);
+	destroyPQExpBuffer(buf);
 
 	return true;
 }
