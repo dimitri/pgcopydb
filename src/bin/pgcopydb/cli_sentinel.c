@@ -857,7 +857,7 @@ cli_sentinel_get(int argc, char **argv)
 				LSN_FORMAT_ARGS(sentinel.replay_lsn));
 
 		json_object_set_string(jsobj, "startpos", startpos);
-		json_object_set_string(jsobj, "endpos", startpos);
+		json_object_set_string(jsobj, "endpos", endpos);
 		json_object_set_boolean(jsobj, "apply", sentinel.apply);
 		json_object_set_string(jsobj, "write_lsn", write_lsn);
 		json_object_set_string(jsobj, "flush_lsn", flush_lsn);
