@@ -620,6 +620,36 @@ copydb_copy_supervisor_add_table_hook(void *ctx, SourceTable *table)
 			return false;
 		}
 
+		/*
+		 * When resuming a previous run, some of the parts of this table might
+		 * already be done: their rows are committed in the target table. A
+		 * TRUNCATE now would discard them while the workers skip those parts,
+		 * so skip the TRUNCATE in that case. A part that was interrupted
+		 * while running is rolled back by Postgres, and is copied again.
+		 */
+		if (granted)
+		{
+			CopyTableDataSpec tableSpecs = { .sourceTable = table };
+
+			if (!summary_table_count_parts_done(&(specs->catalogs.source),
+												&tableSpecs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (tableSpecs.countPartsDone > 0)
+			{
+				log_notice("Skipping TRUNCATE of table %s: "
+						   "%u of %d parts are already done",
+						   table->qname,
+						   tableSpecs.countPartsDone,
+						   table->partition.partCount);
+
+				granted = false;
+			}
+		}
+
 		if (granted)
 		{
 			char relkind = '\0';
