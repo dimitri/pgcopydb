@@ -1211,10 +1211,21 @@ schema_list_all_indexes(PGSQL *pgsql,
 					   filters->type == SOURCE_FILTER_TYPE_LIST_EXCL_INDEX);
 	const char *for_filter_str = for_filter ? "true" : "false";
 
+	/*
+	 * SOURCE_FILTER_TYPE_NONE means list every index with no table filter.
+	 * The target catalog never populates s_table, so catalog_s_table_oid_array
+	 * yields "{}", and "r.oid = ANY('{}')" matches nothing: only a NULL
+	 * table_oids means "all tables" in list_source_indexes.sql. Sending NULL
+	 * here restores the pre-filter behaviour so a --resume can see the
+	 * constraints already built on the target and skip rebuilding them.
+	 */
+	const char *table_oids_param =
+		(filters->type == SOURCE_FILTER_TYPE_NONE) ? NULL : table_oids;
+
 	int paramCount = 4;
 	Oid paramTypes[4] = { TEXTOID, TEXTOID, TEXTOID, TEXTOID };
 	const char *paramValues[4] = {
-		table_oids, excl_idx_nsp, excl_idx_rel, for_filter_str
+		table_oids_param, excl_idx_nsp, excl_idx_rel, for_filter_str
 	};
 
 	if (!pgsql_execute_with_params(pgsql, sql,

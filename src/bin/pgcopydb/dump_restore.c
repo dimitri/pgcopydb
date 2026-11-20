@@ -251,6 +251,19 @@ copydb_target_prepare_schema(CopyDataSpec *specs)
 			/* errors have already been logged */
 			return false;
 		}
+
+		/*
+		 * The target catalog was cached before the DROP ... CASCADE above and
+		 * still lists the constraints that drop just removed. Re-query the live
+		 * target so the foundConstraintOnTarget guard does not skip rebuilding
+		 * them, which would silently leave the tables without their primary-key
+		 * and unique constraints.
+		 */
+		if (!copydb_prepare_target_catalog(specs))
+		{
+			/* errors have already been logged */
+			return false;
+		}
 	}
 
 	specs->restoreOptions.section = PG_RESTORE_SECTION_PRE_DATA;

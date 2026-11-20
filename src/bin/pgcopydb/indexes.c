@@ -656,6 +656,40 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 		}
 
 		/*
+		 * On --resume the row may still name the worker from the interrupted run
+		 * that first saw the indexes done. If that pid is neither ours nor a live
+		 * process, the constraints it was meant to build were never finished:
+		 * reclaim the row for this worker so constraint creation runs again,
+		 * mirroring the stale-pid handling in copydb_index_is_being_processed.
+		 */
+		if (tableSpecs.indexesDonePid != getpid() &&
+			kill(tableSpecs.indexesDonePid, 0) != 0)
+		{
+			log_notice("Found stale pid %d holding the constraint build for "
+					   "table %s, reclaiming it",
+					   tableSpecs.indexesDonePid,
+					   table->qname);
+
+			if (!summary_delete_table_indexes_done(sourceDB, &tableSpecs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!summary_add_table_indexes_done(sourceDB, &tableSpecs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+
+			if (!summary_lookup_table_indexes_done(sourceDB, &tableSpecs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+
+		/*
 		 * Set constraintsAreBeingBuilt to false to allow the current worker to
 		 * process constraints.
 		 */
