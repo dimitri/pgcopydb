@@ -122,6 +122,7 @@ jobs:
           - extensions
           - timescaledb
           - all-databases
+          - target-resume-recovery
           - three-databases
           - cdc-low-level
           - cdc-test-decoding
