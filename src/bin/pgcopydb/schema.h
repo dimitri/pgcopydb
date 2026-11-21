@@ -254,6 +254,7 @@ typedef struct SourceIndex
 
 	bool isPrimary;
 	bool isUnique;
+	bool isReplicaIdentity;     /* pg_index.indisreplident */
 	char *indexColumns;         /* malloc'ed area */
 	char *indexDef;             /* malloc'ed area */
 
