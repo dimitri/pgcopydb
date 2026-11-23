@@ -29,19 +29,43 @@ kill_sql="select count(pg_terminate_backend(pid))
 
 killed=0
 
+# Duty-cycle the chaos instead of killing continuously. A continuous killer can
+# only ever pass on a machine fast enough to finish a whole `clone --resume`
+# inside one sleep gap; on a slow CI runner every attempt is cut down and the
+# transfer never converges. Instead we alternate a KILL window (fire every 0.3s)
+# with a QUIET window (no kills at all) that is long enough for one resume to run
+# to completion. Early resumes still get shredded during KILL windows, so the
+# chaos stays real; a later near-converged resume finishes during a QUIET window
+# regardless of how slow the runner is.
+kill_burst=3     # seconds spent actively killing
+quiet_window=15  # seconds of calm, long enough for one resume to converge
+
 while [ ! -f "${stopfile}" ]
 do
-    n=$(psql -AXqt -d "${PGCOPYDB_TARGET_PGURI}" -c "${kill_sql}" 2>/dev/null)
+    # KILL window: terminate backends every 0.3s for kill_burst seconds.
+    burst_end=$((SECONDS + kill_burst))
 
-    if [ -n "${n}" ] && [ "${n}" -gt 0 ] 2>/dev/null
-    then
-        killed=$((killed + n))
-        echo "killer: terminated ${n} pgcopydb target backend(s) (total ${killed})"
-    fi
+    while [ "${SECONDS}" -lt "${burst_end}" ] && [ ! -f "${stopfile}" ]
+    do
+        n=$(psql -AXqt -d "${PGCOPYDB_TARGET_PGURI}" -c "${kill_sql}" 2>/dev/null)
 
-    # Short enough to cut down most clone invocations mid-flight, long enough to
-    # let a resume make forward progress between kills.
-    sleep 0.3
+        if [ -n "${n}" ] && [ "${n}" -gt 0 ] 2>/dev/null
+        then
+            killed=$((killed + n))
+            echo "killer: terminated ${n} pgcopydb target backend(s) (total ${killed})"
+        fi
+
+        sleep 0.3
+    done
+
+    # QUIET window: stop killing so a resume has an uninterrupted chance to
+    # finish the transfer. Poll the stopfile so we exit promptly when told to.
+    quiet_end=$((SECONDS + quiet_window))
+
+    while [ "${SECONDS}" -lt "${quiet_end}" ] && [ ! -f "${stopfile}" ]
+    do
+        sleep 0.3
+    done
 done
 
 echo "killer: stopping, terminated ${killed} pgcopydb target backend(s) in total"
