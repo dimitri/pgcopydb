@@ -662,7 +662,8 @@ copydb_table_indexes_are_done(CopyDataSpec *specs,
 		 * reclaim the row for this worker so constraint creation runs again,
 		 * mirroring the stale-pid handling in copydb_index_is_being_processed.
 		 */
-		if (tableSpecs.indexesDonePid != getpid() &&
+		if (tableSpecs.indexesDonePid != 0 &&
+			tableSpecs.indexesDonePid != getpid() &&
 			kill(tableSpecs.indexesDonePid, 0) != 0)
 		{
 			log_notice("Found stale pid %d holding the constraint build for "
