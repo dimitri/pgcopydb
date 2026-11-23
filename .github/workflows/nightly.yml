@@ -113,6 +113,7 @@ jobs:
           - blobs
           - filtering
           - partitioned-target
+          - target-resume-recovery
           - extensions
           - timescaledb
           - all-databases

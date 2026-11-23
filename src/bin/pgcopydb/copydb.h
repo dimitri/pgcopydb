@@ -738,6 +738,9 @@ bool summary_table_fetch_count_indexes_left(SQLiteQuery *query);
 bool summary_add_table_indexes_done(DatabaseCatalog *catalog,
 									CopyTableDataSpec *tableSpecs);
 
+bool summary_delete_table_indexes_done(DatabaseCatalog *catalog,
+									   CopyTableDataSpec *tableSpecs);
+
 bool summary_lookup_table_indexes_done(DatabaseCatalog *catalog,
 									   CopyTableDataSpec *tableSpecs);
 

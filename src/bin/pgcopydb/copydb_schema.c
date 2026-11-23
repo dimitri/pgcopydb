@@ -48,6 +48,26 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	if (!specs->fetchCatalogs)
 	{
 		log_info("Re-using catalog caches");
+
+		/*
+		 * Source catalogs are re-used from a previous run, but the target
+		 * catalog must still be re-queried live: a --resume picks up after
+		 * constraints were already built on the target, and the stale cache
+		 * taken before they existed would hide them. Refreshing it here lets
+		 * the foundConstraintOnTarget guard skip the already-created
+		 * constraints, which ALTER TABLE ADD CONSTRAINT cannot do itself.
+		 */
+		if (specs->section == DATA_SECTION_ALL ||
+			specs->section == DATA_SECTION_EXTENSIONS ||
+			specs->section == DATA_SECTION_COLLATIONS)
+		{
+			if (!copydb_prepare_target_catalog(specs))
+			{
+				/* errors have already been logged */
+				return false;
+			}
+		}
+
 		return true;
 	}
 
@@ -394,7 +414,18 @@ copydb_fetch_previous_run_state(CopyDataSpec *specs)
 		log_notice("Table Data has been copied to the target instance");
 	}
 
-	if (topLevelTimingArray[TIMING_SECTION_CREATE_INDEX].doneTime > 0)
+	/*
+	 * The CREATE INDEX / CONSTRAINTS cumulative sections are stamped done by the
+	 * index supervisor whenever its workers exit cleanly, including when a failed
+	 * COPY sends them an early STOP before any index was built. Such a done-time
+	 * carries a zero count and must not latch indexCopyIsDone: index building runs
+	 * strictly after COPY, so the indexes cannot be done unless COPY itself
+	 * finished. Gating on tableCopyIsDone keeps a resume from skipping index and
+	 * constraint reconciliation and leaving post-data pg_restore to re-add objects
+	 * that were never actually created.
+	 */
+	if (specs->runState.tableCopyIsDone &&
+		topLevelTimingArray[TIMING_SECTION_CREATE_INDEX].doneTime > 0)
 	{
 		specs->runState.indexCopyIsDone = true;
 		log_notice("Indexes have been copied to the target instance");

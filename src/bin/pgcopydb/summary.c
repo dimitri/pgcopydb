@@ -940,8 +940,13 @@ summary_add_vacuum(DatabaseCatalog *catalog, CopyTableDataSpec *tableSpecs)
 		return false;
 	}
 
+	/*
+	 * A --resume re-vacuums a table whose prior-run summary row still exists;
+	 * vacuum_summary is unique(tableoid), so replace the stale row rather than
+	 * failing the insert. Mirrors summary_add_table's insert-or-replace.
+	 */
 	char *sql =
-		"insert into vacuum_summary(pid, tableoid, start_time_epoch)"
+		"insert or replace into vacuum_summary(pid, tableoid, start_time_epoch)"
 		"values($1, $2, $3)";
 
 	if (!semaphore_lock(&(catalog->sema)))
@@ -1535,9 +1540,20 @@ summary_add_constraint(DatabaseCatalog *catalog, CopyIndexSpec *indexSpecs)
 		return false;
 	}
 
+	/*
+	 * Claim the constraint summary for the current worker: a --resume run (or an
+	 * in-process replay) finds the unfinished row a prior attempt left behind and
+	 * takes ownership of it, so summary_finish_constraint's pid-filtered UPDATE
+	 * matches. Without the upsert the stale pid survives, done_time is never set,
+	 * and post-data pg_restore re-adds the already-created constraint.
+	 */
 	char *sql =
-		"insert or ignore into summary(pid, conoid, start_time_epoch, command)"
-		"values($1, $2, $3, $4)";
+		"insert into summary(pid, conoid, start_time_epoch, command)"
+		"values($1, $2, $3, $4) "
+		"on conflict(conoid) where conoid is not null do update set "
+		"  pid              = excluded.pid, "
+		"  start_time_epoch = excluded.start_time_epoch, "
+		"  command          = excluded.command";
 
 	if (!semaphore_lock(&(catalog->sema)))
 	{
@@ -2099,6 +2115,70 @@ summary_add_table_indexes_done(DatabaseCatalog *catalog,
 	}
 
 	/* now execute the query, which return exactly one row */
+	if (!catalog_sql_execute_once(&query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	(void) semaphore_unlock(&(catalog->sema));
+
+	return true;
+}
+
+
+/*
+ * summary_delete_table_indexes_done removes the s_table_indexes_done row for a
+ * table, so a resuming worker can reclaim the right to build its constraints
+ * after the process that first saw the indexes done has died mid-constraint.
+ */
+bool
+summary_delete_table_indexes_done(DatabaseCatalog *catalog,
+								  CopyTableDataSpec *tableSpecs)
+{
+	sqlite3 *db = catalog->db;
+
+	if (db == NULL)
+	{
+		log_error("BUG: summary_delete_table_indexes_done: db is NULL");
+		return false;
+	}
+
+	SourceTable *table = tableSpecs->sourceTable;
+
+	char *sql = "delete from s_table_indexes_done where tableoid = $1";
+
+	if (!semaphore_lock(&(catalog->sema)))
+	{
+		/* errors have already been logged */
+		return false;
+	}
+
+	SQLiteQuery query = { 0 };
+
+	if (!catalog_sql_prepare(db, sql, &query))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* bind our parameters now */
+	BindParam params[] = {
+		{ BIND_PARAMETER_TYPE_INT64, "tableoid", table->oid, NULL }
+	};
+
+	int count = sizeof(params) / sizeof(params[0]);
+
+	if (!catalog_sql_bind(&query, params, count))
+	{
+		/* errors have already been logged */
+		(void) semaphore_unlock(&(catalog->sema));
+		return false;
+	}
+
+	/* now execute the query, which does not return any row */
 	if (!catalog_sql_execute_once(&query))
 	{
 		/* errors have already been logged */
