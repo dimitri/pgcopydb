@@ -13,7 +13,7 @@ all: pagila pagila-multi-steps blobs unit filtering extensions \
 	 cdc-pgoutput cdc-filtering-pgoutput \
 	 follow-wal2json follow-9.6 follow-data-only \
 	 follow-pgoutput follow-filtering \
-	 toc-coverage;
+	 split-table-snapshot toc-coverage;
 
 # Unlike every other test target, this needs no docker image and no
 # live Postgres connection: it runs the already-built pgcopydb binary
@@ -107,6 +107,9 @@ follow-ddl-message-stall: build
 follow-restart: build
 	$(MAKE) -C $@
 
+split-table-snapshot: build
+	$(MAKE) -C $@
+
 # Benchmark, not a pass/fail test -- not part of the CI matrix, run it
 # locally to measure apply throughput under a burst of small transactions.
 benchmark-apply: build
@@ -153,6 +156,6 @@ clean-images:
 .PHONY: cdc-pgoutput cdc-filtering-pgoutput follow-pgoutput follow-filtering
 .PHONY: follow-wal2json follow-9.6
 .PHONY: follow-endpos-tail follow-endpos-quiet-tail follow-ddl-message-stall
-.PHONY: follow-restart
+.PHONY: follow-restart split-table-snapshot
 .PHONY: benchmark-apply
 .PHONY: timescaledb citus
