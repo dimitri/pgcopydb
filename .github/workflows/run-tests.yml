@@ -116,6 +116,7 @@ jobs:
           - pagila
           - pagila-multi-steps
           - pagila-standby
+          - split-table-snapshot
           - unit
           - blobs
           - filtering

@@ -98,7 +98,7 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 	}
 	else
 	{
-		log_debug("--not-consistent, create a fresh connection");
+		log_debug("create a fresh connection to fetch the source schema");
 		if (!pgsql_init(&pgsql, specs->connStrings.source_pguri, PGSQL_CONN_SOURCE))
 		{
 			/* errors have already been logged */
@@ -123,6 +123,27 @@ copydb_fetch_schema_and_prepare_specs(CopyDataSpec *specs)
 		{
 			/* errors have already been logged */
 			return false;
+		}
+
+		/*
+		 * Split-table ranges come from min/max queries run here. Read them in
+		 * the exported snapshot, or rows deleted since the export fall below
+		 * the first range and the COPY skips them.
+		 */
+		TransactionSnapshot *snapshot = &(specs->sourceSnapshot);
+
+		if (specs->consistent && !IS_EMPTY_STRING_BUFFER(snapshot->snapshot))
+		{
+			IsolationLevel level = ISOLATION_REPEATABLE_READ;
+			bool deferrable = true;
+
+			if (!pgsql_set_transaction(src, level, snapshot->isReadOnly, deferrable) ||
+				!pgsql_set_snapshot(src, snapshot->snapshot))
+			{
+				/* errors have already been logged */
+				(void) pgsql_finish(src);
+				return false;
+			}
 		}
 	}
 
